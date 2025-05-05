@@ -116,6 +116,7 @@ class Engine(EngineBase):
         logger.info(f"{server_args=}")
 
         # Launch subprocesses
+        # todo 启动进程，如调度器
         tokenizer_manager, scheduler_info = _launch_subprocesses(
             server_args=server_args,
             port_args=port_args,
@@ -129,7 +130,7 @@ class Engine(EngineBase):
         self.send_to_rpc = get_zmq_socket(
             context, zmq.DEALER, port_args.rpc_ipc_name, True
         )
-
+    # todo 核心方法入口！！！！！！
     def generate(
         self,
         # The input prompt. It can be a single prompt or a batch of prompts.
@@ -478,7 +479,7 @@ def _set_envs_and_config(server_args: ServerArgs):
     # Set mp start method
     mp.set_start_method("spawn", force=True)
 
-
+# todo 启动调度器进程！！！！！！
 def _launch_subprocesses(
     server_args: ServerArgs, port_args: Optional[PortArgs] = None
 ) -> Tuple[TokenizerManager, Dict]:
@@ -499,7 +500,7 @@ def _launch_subprocesses(
     server_args.model_path, server_args.tokenizer_path = prepare_model_and_tokenizer(
         server_args.model_path, server_args.tokenizer_path
     )
-
+    # todo 调度器进程集合
     scheduler_procs = []
     if server_args.dp_size == 1:
         # Launch tensor parallel scheduler processes
@@ -513,6 +514,7 @@ def _launch_subprocesses(
             tp_size_per_node * server_args.node_rank,
             tp_size_per_node * (server_args.node_rank + 1),
         )
+        # todo 为每一个tp_rank启动一个调度器
         for tp_rank in tp_rank_range:
             reader, writer = mp.Pipe(duplex=False)
             gpu_id = (
@@ -520,6 +522,7 @@ def _launch_subprocesses(
                 + (tp_rank % tp_size_per_node) * server_args.gpu_id_step
             )
             proc = mp.Process(
+                # todo 启动调度器！！！！！！进入Scheduler中
                 target=run_scheduler_process,
                 args=(server_args, port_args, gpu_id, tp_rank, None, writer),
             )
@@ -560,6 +563,7 @@ def _launch_subprocesses(
         return None, None
 
     # Launch detokenizer process
+    # todo detoken proc！！！！！！
     detoken_proc = mp.Process(
         target=run_detokenizer_process,
         args=(
@@ -570,6 +574,7 @@ def _launch_subprocesses(
     detoken_proc.start()
 
     # Launch tokenizer process
+    # todo tokenizer proc！！！！！！
     tokenizer_manager = TokenizerManager(server_args, port_args)
     if server_args.chat_template:
         load_chat_template_for_openai_api(
