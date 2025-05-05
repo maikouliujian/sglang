@@ -627,7 +627,7 @@ class Scheduler(
             self.cur_batch = batch
 
             if batch:
-                # todo 运行批次，调用相应的生成或嵌入函数，并返回结果。
+                # todo 运行批次，调用相应的生成或嵌入函数，并返回结果！！！！！！。
                 result = self.run_batch(batch)
                 self.process_batch_result(batch, result)
             else:
@@ -1348,7 +1348,7 @@ class Scheduler(
         # Update batch tensors
         batch.prepare_for_decode()
         return batch
-
+    # todo 核心方法！！！！！
     def run_batch(
         self, batch: ScheduleBatch
     ) -> Union[GenerationBatchResult, EmbeddingBatchResult]:
@@ -1366,6 +1366,7 @@ class Scheduler(
         if self.is_generation:
             if self.spec_algorithm.is_none():
                 model_worker_batch = batch.get_model_worker_batch()
+                # todo 调用tp_worker的forward_batch_generation方法
                 logits_output, next_token_ids = self.tp_worker.forward_batch_generation(
                     model_worker_batch
                 )
