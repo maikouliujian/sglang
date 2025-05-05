@@ -33,7 +33,7 @@ class AttentionArch(IntEnum):
     MLA = auto()
     MHA = auto()
 
-
+# todo 模型配置
 class ModelConfig:
     def __init__(
         self,

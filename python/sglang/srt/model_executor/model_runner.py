@@ -96,7 +96,7 @@ logger = logging.getLogger(__name__)
 SGLANG_CI_SMALL_KV_SIZE = os.getenv("SGLANG_CI_SMALL_KV_SIZE", None)
 UNBALANCED_MODEL_LOADING_TIMEOUT_S = 300
 
-
+# todo 【模型执行器，负责实际的推理过程，运行模型的前向传播过程，负责推理的核心工作！！！！！！】【核心类】
 class ModelRunner:
     """ModelRunner runs the forward passes of the models."""
 
@@ -114,6 +114,7 @@ class ModelRunner:
         token_to_kv_pool_allocator: Optional[TokenToKVPoolAllocator] = None,
     ):
         # Parse args
+        # todo 解析传入的配置参数
         self.model_config = model_config
         self.mem_fraction_static = mem_fraction_static
         self.device = server_args.device
@@ -123,8 +124,11 @@ class ModelRunner:
         self.dist_port = nccl_port
         self.server_args = server_args
         self.is_draft_worker = is_draft_worker
+        # todo 是否为生成模型
         self.is_generation = model_config.is_generation
+        # todo 是否为多模态模型
         self.is_multimodal = model_config.is_multimodal
+        # todo 只有rank为0的节点进行日志记录
         self.should_log = tp_rank == 0
         self.spec_algorithm = SpeculativeAlgorithm.from_string(
             server_args.speculative_algorithm
@@ -136,6 +140,7 @@ class ModelRunner:
         self.attention_chunk_size = model_config.attention_chunk_size
 
         # Model-specific adjustment
+        # todo attention_backend设置
         self.model_specific_adjustment()
 
         if server_args.show_time_cost:
@@ -171,6 +176,7 @@ class ModelRunner:
         set_cpu_offload_max_bytes(int(server_args.cpu_offload_gb * 1024**3))
 
         # Get memory before model loading
+        # todo """初始化torch分布式环境，包括通信后端和分布式训练设置。"""
         min_per_gpu_memory = self.init_torch_distributed()
 
         # Update deep gemm configure
@@ -178,6 +184,7 @@ class ModelRunner:
             update_deep_gemm_config(gpu_id, server_args)
 
         # If it is a draft model tp_group can be different.
+        # todo 初始化模型【加载模型】
         self.initialize(min_per_gpu_memory)
 
     def initialize(self, min_per_gpu_memory: float):
@@ -187,27 +194,33 @@ class ModelRunner:
         )
 
         # Load the model
+        # todo 加载模型！！！！！！
         self.sampler = Sampler()
         self.load_model()
 
         # Apply torchao quantization
+        # todo 应用torchao量化
         torchao_applied = getattr(self.model, "torchao_applied", False)
         # In layered loading, torchao may have been applied
+        # todo 在分层加载中，torchao可能已经被应用
         if not torchao_applied:
             apply_torchao_config_to_model(
                 self.model, global_server_args_dict["torchao_config"]
             )
 
         # Apply torch TP if the model supports it
+        # todo 应用torch TP（如果模型支持）
         supports_torch_tp = getattr(self.model, "supports_torch_tp", False)
         if self.tp_size > 1 and supports_torch_tp:
             self.apply_torch_tp()
 
         # Init lora
+        # todo lora
         if server_args.lora_paths is not None:
             self.init_lora_manager()
 
         # Init memory pool and attention backends
+        # todo 初始化内存池和注意力后端
         self.init_memory_pool(
             min_per_gpu_memory,
             server_args.max_running_requests,
@@ -332,6 +345,7 @@ class ModelRunner:
             logger.info("Chunked prefix cache is turned on.")
 
     def init_torch_distributed(self):
+        """初始化torch分布式环境，包括通信后端和分布式训练设置。"""
         logger.info("Init torch distributed begin.")
 
         try:
@@ -353,8 +367,10 @@ class ModelRunner:
 
         before_avail_memory = get_available_gpu_memory(self.device, self.gpu_id)
         if not self.server_args.enable_p2p_check:
+            # todo 【monkey_patch（猴子补丁） 是一种 动态修改或扩展代码行为 的技术，通常用于 不修改原始源码的情况下，
+            #  临时添加、替换或修复某些功能。它在分布式训练、性能优化、调试等场景中非常常见。】
             monkey_patch_p2p_access_check()
-
+        # todo 初始化分布式环境
         if self.server_args.dist_init_addr:
             dist_init_method = f"tcp://{self.server_args.dist_init_addr}"
         else:
@@ -387,6 +403,7 @@ class ModelRunner:
 
         # Check memory for tensor parallelism
         local_gpu_memory = get_available_gpu_memory(self.device, self.gpu_id)
+        # todo 检查内存是否均衡
         if self.tp_size > 1:
             if min_per_gpu_memory < local_gpu_memory * 0.9:
                 if get_bool_env_var("SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK"):
@@ -404,7 +421,7 @@ class ModelRunner:
             f"Init torch distributed ends. mem usage={(before_avail_memory - local_gpu_memory):.2f} GB"
         )
         return min_per_gpu_memory
-
+    # todo 加载模型！！！！！！
     def load_model(self):
         before_avail_memory = get_available_gpu_memory(self.device, self.gpu_id)
         logger.info(
@@ -427,6 +444,7 @@ class ModelRunner:
         set_cuda_arch()
 
         # Prepare the model config
+        # todo 准备加载配置
         self.load_config = LoadConfig(
             load_format=self.server_args.load_format,
             download_dir=self.server_args.download_dir,
@@ -436,10 +454,12 @@ class ModelRunner:
 
         # Load the model
         # Remove monkey_patch when linear.py quant remove dependencies with vllm
+        # todo 加载模型！！！！！！
         monkey_patch_vllm_parallel_state()
         monkey_patch_isinstance_for_vllm_base_layer()
 
         with self.memory_saver_adapter.region():
+            # todo 加载模型！！！！！！
             self.model = get_model(
                 model_config=self.model_config,
                 load_config=self.load_config,
@@ -503,6 +523,7 @@ class ModelRunner:
     def update_weights_from_disk(
         self, model_path: str, load_format: str
     ) -> tuple[bool, str]:
+        """从磁盘更新引擎权重。"""
         """Update engine weights in-place from the disk."""
         logger.info(
             f"Update engine weights online from disk begin. "
@@ -1028,7 +1049,7 @@ class ModelRunner:
         return self.model.forward(
             forward_batch.input_ids, forward_batch.positions, forward_batch
         )
-
+    # todo 前向传播核心方法！！！！！！
     def forward(
         self, forward_batch: ForwardBatch, skip_attn_backend_init: bool = False
     ) -> LogitsProcessorOutput:
