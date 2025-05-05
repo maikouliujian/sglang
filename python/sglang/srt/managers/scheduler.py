@@ -157,7 +157,10 @@ class EmbeddingBatchResult:
     embeddings: torch.Tensor
     bid: int
 
-
+# todo 【Scheduler 类是一个调度器，负责管理和调度一个张量并行（TP）GPU工作者，它协调了模型的生成（generation）或嵌入（embedding）任务的执行。
+#  调度器通过接收请求、运行批次、并生成结果来处理请求，并管理与硬件（如GPU、内存池）相关的操作。它还涉及到缓存管理、内存池释放、权重更新等操作。】
+# todo【Scheduler 类是一个高度集成的调度器，负责协调多个工作者、管理请求、调度批次并优化GPU和内存资源的利用。
+# todo 它能够灵活处理生成与嵌入任务，支持异步操作、投机解码、混合预填充等高级功能，并能够高效管理缓存、内存以及模型权重的更新。】
 class Scheduler(
     SchedulerOutputProcessorMixin,
     SchedulerDisaggregationDecodeMixin,
@@ -253,6 +256,7 @@ class Scheduler(
             logger.info("Overlap scheduler is disabled for multimodal models.")
 
         # Launch a tensor parallel worker
+        # todo 是否允许重叠调度
         if self.enable_overlap:
             TpWorkerClass = TpModelWorkerClient
         else:
@@ -267,6 +271,7 @@ class Scheduler(
         )
 
         # Launch a draft worker for speculative decoding
+        # todo Speculative Decoding ！！！！！！
         if self.spec_algorithm.is_eagle():
             from sglang.srt.speculative.eagle_worker import EAGLEWorker
 
@@ -399,6 +404,7 @@ class Scheduler(
         self.init_metrics()
 
         # Init request dispatcher
+        # todo 不同的请求类型 -> 不同的处理逻辑！！！！！！
         self._request_dispatcher = TypeBasedDispatcher(
             [
                 (TokenizedGenerateReqInput, self.handle_generate_request),
@@ -612,13 +618,16 @@ class Scheduler(
     def event_loop_normal(self):
         """A normal scheduler loop."""
         while True:
+            # todo 接收来自不同源的请求，并将请求广播到其他张量并行工作者。
             recv_reqs = self.recv_requests()
+            # todo 处理接收到的请求，分发到合适的处理函数（如生成请求、嵌入请求等）！！！！！！
             self.process_input_requests(recv_reqs)
-
+            # todo 获取下一个要运行的批次，决定是否执行预填充（prefill）或解码（decode），并处理DP注意力机制。
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
 
             if batch:
+                # todo 运行批次，调用相应的生成或嵌入函数，并返回结果。
                 result = self.run_batch(batch)
                 self.process_batch_result(batch, result)
             else:
@@ -725,7 +734,7 @@ class Scheduler(
         elif self.tp_size != 1:
             recv_reqs = broadcast_pyobj(recv_reqs, self.tp_rank, self.tp_cpu_group)
         return recv_reqs
-
+    # todo 处理不同的请求
     def process_input_requests(self, recv_reqs: List):
         for recv_req in recv_reqs:
             # If it is a health check generation request and there are running requests, ignore it.
@@ -734,7 +743,7 @@ class Scheduler(
             ):
                 self.return_health_check_ct += 1
                 continue
-
+            # todo 将不同的请求类型分发到不同的处理逻辑！！！！！！
             output = self._request_dispatcher(recv_req)
             if output is not None:
                 if isinstance(output, RpcReqOutput):
@@ -1963,7 +1972,7 @@ def _import_static_state(model, static_params):
     for name, tensor in static_params["buffers"]:
         self_named_buffers[name][...] = tensor
 
-
+# todo 调度器进程
 def run_scheduler_process(
     server_args: ServerArgs,
     port_args: PortArgs,
@@ -1998,6 +2007,7 @@ def run_scheduler_process(
 
     # Create a scheduler and run the event loop
     try:
+        # todo 调度器!!!!!!
         scheduler = Scheduler(server_args, port_args, gpu_id, tp_rank, dp_rank)
         pipe_writer.send(
             {
@@ -2010,8 +2020,10 @@ def run_scheduler_process(
 
         if disaggregation_mode == DisaggregationMode.NULL:
             if scheduler.enable_overlap:
+                # todo 异步调度循环，能够重叠执行CPU处理与GPU计算，提升效率。
                 scheduler.event_loop_overlap()
             else:
+                # todo 正常的调度循环，依次接收请求、处理请求、执行批次并生成结果。
                 scheduler.event_loop_normal()
         elif disaggregation_mode == DisaggregationMode.PREFILL:
             if scheduler.enable_overlap:
