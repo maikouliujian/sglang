@@ -276,7 +276,7 @@ def calculate_time(show=False, min_cost_ms=0.0):
 
     return wrapper
 
-
+# todo 获取有效内存
 def get_available_gpu_memory(device, gpu_id, distributed=False, empty_cache=True):
     """
     Get available memory for cuda:gpu_id device.

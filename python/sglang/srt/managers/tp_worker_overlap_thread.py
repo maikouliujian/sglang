@@ -38,7 +38,7 @@ from sglang.utils import get_exception_traceback
 
 logger = logging.getLogger(__name__)
 
-
+# todo """解决未来的token id，通过查找映射更新输入的input_ids"""
 @torch.compile(dynamic=True, backend=get_compiler_backend())
 def resolve_future_token_ids(input_ids, future_token_ids_map):
     input_ids[:] = torch.where(
@@ -47,7 +47,9 @@ def resolve_future_token_ids(input_ids, future_token_ids_map):
         input_ids,
     )
 
-
+#todo【一个tensor并行worker的客户端，负责与模型交互】
+#todo【TpModelWorkerClient 类是一个负责管理张量并行模型工作者的客户端。它与 TpModelWorker 进行交互，管理输入输出队列并处理模型推理任务。
+# 该类通过多线程实现前向推理，并在计算完成后将结果传回主线程】
 class TpModelWorkerClient:
     """A tensor parallel model worker."""
 
@@ -60,12 +62,14 @@ class TpModelWorkerClient:
         nccl_port: int,
     ):
         # Load the model
+        # todo 初始化模型工作者
         self.worker = TpModelWorker(server_args, gpu_id, tp_rank, dp_rank, nccl_port)
         self.max_running_requests = self.worker.max_running_requests
         self.device = self.worker.device
         self.gpu_id = gpu_id
 
         # Init future mappings
+        # todo 初始化未来token映射
         self.future_token_ids_ct = 0
         self.future_token_ids_limit = self.max_running_requests * 3
         self.future_token_ids_map = torch.empty(
@@ -73,9 +77,13 @@ class TpModelWorkerClient:
         )
 
         # Launch threads
+        # todo 启动线程
+        # todo 输入队列，存储待处理的batch
         self.input_queue = Queue()
+        # todo 输出队列，存储处理结果
         self.output_queue = Queue()
         self.forward_stream = torch.get_device_module(self.device).Stream()
+        # todo 启动前向线程
         self.forward_thread = threading.Thread(
             target=self.forward_thread_func,
         )
@@ -106,51 +114,63 @@ class TpModelWorkerClient:
     def get_kv_cache(self):
         return self.worker.model_runner.token_to_kv_pool
 
+    # todo """前向计算线程的函数，处理模型推理"""
     def forward_thread_func(self):
         try:
             with torch.get_device_module(self.device).stream(self.forward_stream):
+                # todo 推理！！！！！！
                 self.forward_thread_func_()
         except Exception:
             traceback = get_exception_traceback()
             logger.error(f"TpModelWorkerClient hit an exception: {traceback}")
             self.parent_process.send_signal(signal.SIGQUIT)
 
+    # todo """前向计算的实际函数，处理模型的推理和结果收集"""，核心方法！！！！！！
     @DynamicGradMode()
     def forward_thread_func_(self):
         batch_pt = 0
         batch_lists = [None] * 2
 
         while True:
+            # todo 从输入队列获取batch【问题：input_queue中的数据哪来的？
+            #                        答：207行的forward_batch_generation方法】
             model_worker_batch, future_token_ids_ct = self.input_queue.get()
+            # todo 如果batch为空，退出循环
             if not model_worker_batch:
                 break
 
             # Keep a reference of model_worker_batch by storing it into a list.
             # Otherwise, the tensor members of model_worker_batch will be released
             # by pytorch and cause CUDA illegal memory access errors.
+            # todo 保持对model_worker_batch的引用，否则它的tensor成员会被释放，导致CUDA内存访问错误
             batch_lists[batch_pt % 2] = model_worker_batch
             batch_pt += 1
 
             # Create event
+            # todo 创建事件
             self.launch_done = threading.Event()
             copy_done = torch.get_device_module(self.device).Event()
 
             # Resolve future tokens in the input
+            # todo 解决输入中的未来token ids
             input_ids = model_worker_batch.input_ids
             resolve_future_token_ids(input_ids, self.future_token_ids_map)
 
             # Run forward
+            # todo 进行前向推理！！！！！！
             logits_output, next_token_ids = self.worker.forward_batch_generation(
                 model_worker_batch, self.launch_done
             )
 
             # Update the future token ids map
+            # todo 更新未来token id映射
             bs = len(model_worker_batch.seq_lens)
             self.future_token_ids_map[
                 future_token_ids_ct + 1 : future_token_ids_ct + bs + 1
             ] = next_token_ids
 
             # Copy results to the CPU
+            # todo 将结果复制到CPU
             if model_worker_batch.return_logprob:
                 logits_output.next_token_logprobs = (
                     logits_output.next_token_logprobs.to("cpu", non_blocking=True)
@@ -183,9 +203,10 @@ class TpModelWorkerClient:
                 )
         next_token_ids = next_token_ids.tolist()
         return logits_output, next_token_ids
-
+    # todo """生成新的batch并将其推送到队列进行处理"""
     def forward_batch_generation(self, model_worker_batch: ModelWorkerBatch):
         # Create a new copy of sampling_info because it will be updated in-place by the scheduler for the next batch.
+        # todo 创建sampling_info的副本，因为调度器会就地更新它
         sampling_info = model_worker_batch.sampling_info
         sampling_info.update_penalties()
         model_worker_batch.sampling_info = self.cur_sampling_info = dataclasses.replace(
@@ -198,6 +219,7 @@ class TpModelWorkerClient:
         self.scheduler_stream.synchronize()
 
         # Push a new batch to the queue
+        # todo 向input_queue中存放数据
         self.input_queue.put((model_worker_batch, self.future_token_ids_ct))
 
         # Allocate output future objects
