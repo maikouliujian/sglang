@@ -88,7 +88,7 @@ def _key_match_paged(key0: List, key1: List, page_size: int):
 
     return i
 
-
+# todo RadixCache！！！！！！！
 class RadixCache(BasePrefixCache):
     def __init__(
         self,
@@ -113,11 +113,13 @@ class RadixCache(BasePrefixCache):
         else:
             self.key_match_fn = partial(_key_match_paged, page_size=page_size)
             self.get_child_key_fn = lambda key: tuple(key[:page_size])
+        # todo 重置
         self.reset()
 
     ##### Public API #####
 
     def reset(self):
+        # todo trie树
         self.root_node = TreeNode()
         self.root_node.key = []
         self.root_node.value = []
@@ -149,7 +151,7 @@ class RadixCache(BasePrefixCache):
         if self.page_size != 1:
             page_aligned_len = len(key) // self.page_size * self.page_size
             key = key[:page_aligned_len]
-
+        # todo 找到匹配的节点
         value, last_node = self._match_prefix_helper(self.root_node, key)
         if value:
             value = torch.cat(value)

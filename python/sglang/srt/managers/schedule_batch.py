@@ -524,6 +524,7 @@ class Req:
         # For disaggregation
         self.bootstrap_host: str = bootstrap_host
         self.bootstrap_room: Optional[int] = bootstrap_room
+        # todo kvcache的sender
         self.disagg_kv_sender: Optional[BaseKVSender] = None
 
         # used for warmup because we don't have a pair yet when init

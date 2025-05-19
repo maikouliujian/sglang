@@ -257,6 +257,7 @@ async def get_models():
 
 def run(prefill_addrs, decode_addrs, host, port):
     global load_balancer
+    # todo load_balancer,负责选择 P D 节点对发送请求
     load_balancer = MiniLoadBalancer(prefill_addrs, decode_addrs)
     uvicorn.run(app, host=host, port=port)
 

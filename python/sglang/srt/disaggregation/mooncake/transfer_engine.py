@@ -17,7 +17,7 @@ class MooncakeTransferEngine:
                 "https://github.com/kvcache-ai/Mooncake/blob/main/doc/en/build.md "  # noqa: E501
                 "to run SGLang with MooncakeTransferEngine."
             ) from e
-
+        # todo 真正的传输engine
         self.engine = TransferEngine()
         self.hostname = hostname
         self.gpu_id = gpu_id
@@ -61,7 +61,7 @@ class MooncakeTransferEngine:
         self, session_id: str, buffer: int, peer_buffer_address: int, length: int
     ) -> int:
         """Synchronously transfer data to the specified address."""
-
+        # todo 将数据发送至peer_buffer_address！！！！！！！
         ret = self.engine.transfer_sync_write(
             session_id, buffer, peer_buffer_address, length
         )

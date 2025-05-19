@@ -8,13 +8,13 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
-
+# todo 分离模式！！！！！！
 class DisaggregationMode(Enum):
     NULL = "null"
     PREFILL = "prefill"
     DECODE = "decode"
 
-
+# todo 获取kvcache 状态
 def poll_and_all_reduce(pollers, gloo_group):
     polls = [int(poller.poll()) for poller in pollers]
     tensor_to_reduce = torch.tensor(polls, dtype=torch.uint8, device="cpu")
@@ -57,7 +57,7 @@ class KVClassType(Enum):
     RECEIVER = "receiver"
     BOOTSTRAP_SERVER = "bootstrap_server"
 
-
+# todo 获取pd分列类
 def get_kv_class(transfer_backend: TransferBackend, class_type: KVClassType):
     if transfer_backend == TransferBackend.MOONCAKE:
         from sglang.srt.disaggregation.mooncake import (

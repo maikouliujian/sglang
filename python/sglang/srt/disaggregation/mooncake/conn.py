@@ -91,7 +91,7 @@ class TransferInfo:
             dst_aux_index=int(msg[7].decode("ascii")),
         )
 
-
+# todo kvcache transfer 管理者
 class MooncakeKVManager(BaseKVManager):
     def __init__(
         self,
@@ -111,14 +111,19 @@ class MooncakeKVManager(BaseKVManager):
         self.dist_init_addr = server_args.dist_init_addr
         self.request_status: Dict[int, KVPoll] = {}
         self.rank_port = None
+        # todo 跨机通信
         self.server_socket = zmq.Context().socket(zmq.PULL)
         self.register_buffer_to_engine()
         if self.disaggregation_mode == DisaggregationMode.PREFILL:
+            # todo 队列
             self.transfer_queue = queue.Queue()
+            # todo 存储中间信息
             self.transfer_infos: Dict[int, TransferInfo] = {}
+            # todo 启动prefill阶段transfor线程
             self.start_prefill_thread()
             self._register_to_bootstrap()
         elif self.disaggregation_mode == DisaggregationMode.DECODE:
+            # todo decode线程
             self.start_decode_thread()
             self.connection_pool: Dict[str, Dict[str, Union[str, int]]] = {}
         else:
@@ -167,6 +172,7 @@ class MooncakeKVManager(BaseKVManager):
                 length = item_len * len(prefill_index)
 
                 # TODO: make async later
+                # todo 采用mooncake engine 异步传输数据
                 status = self.engine.transfer_sync(
                     mooncake_session_id, src_addr, dst_addr, length
                 )
@@ -226,13 +232,14 @@ class MooncakeKVManager(BaseKVManager):
             # TODO: Shall we use KVPoll.Transferring state?
             while True:
                 try:
+                    # todo 从队列中取出 TransferKVChunk！！！！！！
                     kv_chunk: TransferKVChunk = self.transfer_queue.get(timeout=0.01)
                     req = self.transfer_infos[kv_chunk.room]
                     chunked_dst_kv_indice = req.dst_kv_indices[kv_chunk.index_slice]
                     assert len(chunked_dst_kv_indice) == len(
                         kv_chunk.prefill_kv_indices
                     ), f"len(chunked_dst_kv_indice) = {len(chunked_dst_kv_indice)}, len(kv_chunk.prefill_kv_indices) = {len(kv_chunk.prefill_kv_indices)}"
-
+                    # todo 发送kv cache
                     ret = self.send_kvcache(
                         req.mooncake_session_id,
                         kv_chunk.prefill_kv_indices,
@@ -264,8 +271,9 @@ class MooncakeKVManager(BaseKVManager):
 
                 except queue.Empty:
                     continue
-
+        # todo 启动线程
         threading.Thread(target=bootstrap_thread).start()
+        # todo 启动transfor线程
         threading.Thread(target=transfer_thread).start()
 
     def start_decode_thread(self):
@@ -280,7 +288,7 @@ class MooncakeKVManager(BaseKVManager):
                 self.request_status[bootstrap_room] = status
 
         threading.Thread(target=decode_thread).start()
-
+    # todo 发送kvcache transfer 请求
     def add_transfer_request(
         self,
         bootstrap_room: int,
@@ -291,10 +299,11 @@ class MooncakeKVManager(BaseKVManager):
     ):
         assert self.disaggregation_mode == DisaggregationMode.PREFILL
         assert not is_last or (is_last and aux_index is not None)
-
+        # todo 加入队列
         self.transfer_queue.put(
             TransferKVChunk(
                 room=bootstrap_room,
+                # todo 数据
                 prefill_kv_indices=kv_indices,
                 index_slice=index_slice,
                 is_last=is_last,
@@ -347,7 +356,7 @@ class MooncakeKVManager(BaseKVManager):
         except Exception as e:
             logger.error(f"Prefill Failed to register to bootstrap server: {e}")
 
-
+# todo kvcache 的sender！！！！！！
 class MooncakeKVSender(BaseKVSender):
 
     def __init__(
@@ -363,7 +372,7 @@ class MooncakeKVSender(BaseKVSender):
     def init(self, num_kv_indices: int, aux_index: Optional[int] = None):
         self.num_kv_indices = num_kv_indices
         self.aux_index = aux_index
-
+    # todo 发送kvcache请求
     def send(
         self,
         kv_indices: npt.NDArray[np.int64],
@@ -371,6 +380,8 @@ class MooncakeKVSender(BaseKVSender):
         is_last: bool,
     ):
         if not is_last:
+            # todo 非last
+            # todo 由MooncakeKVManager发送
             self.kv_mgr.add_transfer_request(
                 self.bootstrap_room, kv_indices, index_slice, False
             )
@@ -389,7 +400,7 @@ class MooncakeKVSender(BaseKVSender):
     def failure_exception(self):
         raise Exception("Fake KVSender Exception")
 
-
+# todo MooncakeKVReceiver
 class MooncakeKVReceiver(BaseKVReceiver):
     _ctx = zmq.Context()
     _socket_cache = {}
@@ -482,7 +493,7 @@ class MooncakeKVReceiver(BaseKVReceiver):
                     str(aux_index).encode("ascii"),
                 ]
             )
-
+    # todo 获取kvcache状态数据
     def poll(self) -> KVPoll:
         return self.kv_mgr.check_status(self.bootstrap_room)
 
@@ -493,6 +504,7 @@ class MooncakeKVReceiver(BaseKVReceiver):
 class MooncakeKVBootstrapServer(BaseKVBootstrapServer):
     def __init__(self, port: int):
         self.port = port
+        # todo 新建一个 web.Application()
         self.app = web.Application()
         self.store = dict()
         self.lock = asyncio.Lock()
@@ -500,6 +512,7 @@ class MooncakeKVBootstrapServer(BaseKVBootstrapServer):
         self.prefill_port_table: Dict[int, Dict[str, Union[str, int]]] = {}
 
         # Start bootstrap server
+        # todo 异步起动一个server
         self.thread = threading.Thread(target=self._run_server, daemon=True)
         self.run()
 

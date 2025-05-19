@@ -319,6 +319,7 @@ class Scheduler(
         self.init_memory_pool_and_cache()
 
         # Init running status
+        # todo 等待处理的请求队列
         self.waiting_queue: List[Req] = []
         # The running decoding batch for continuous batching
         self.running_batch: ScheduleBatch = ScheduleBatch(reqs=[], batch_is_full=False)
@@ -434,6 +435,7 @@ class Scheduler(
         self.disaggregation_mode = DisaggregationMode(
             self.server_args.disaggregation_mode
         )
+        # todo 初始化分离模式！！！！！！
         self.init_disaggregation()
 
     def init_tokenizer(self):
@@ -541,10 +543,11 @@ class Scheduler(
             )
 
     def init_disaggregation(self):
+        # todo pd传输后端，默认为mooncake
         self.transfer_backend = TransferBackend(
             self.server_args.disaggregation_transfer_backend
         )
-
+        # todo 分离模式decode阶段
         if (
             self.disaggregation_mode == DisaggregationMode.DECODE
         ):  # *2 for the headroom.
@@ -562,6 +565,7 @@ class Scheduler(
             metadata_buffers = [output_id_buffer]
 
             # The decode requests polling kv cache
+            # todo 接收 kv cache 传输的请求队列
             self.disagg_decode_transfer_queue = DecodeTransferQueue(
                 gloo_group=self.attn_tp_cpu_group,
                 req_to_metadata_buffer_idx_allocator=req_to_metadata_buffer_idx_allocator,
@@ -569,6 +573,7 @@ class Scheduler(
             )
 
             # The decode requests pending for pre-allocation
+            # todo 存放等待 PD 节点配对的请求队列
             self.disagg_decode_prealloc_queue = DecodePreallocQueue(
                 req_to_token_pool=self.req_to_token_pool,
                 token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
@@ -584,6 +589,7 @@ class Scheduler(
                 bootstrap_port=self.server_args.disaggregation_bootstrap_port,
                 transfer_backend=self.transfer_backend,
             )
+        # todo 分离模式prefill阶段
         elif self.disaggregation_mode == DisaggregationMode.PREFILL:
             # *2 for the headroom.
             buffer_size = self.max_running_requests * 2
@@ -598,7 +604,7 @@ class Scheduler(
                 (buffer_size, 16), dtype=aux_dtype, device="cpu"
             )
             metadata_buffers = [output_id_buffer]
-
+            # todo 等待 PD 节点配对的请求队列
             self.disagg_prefill_pending_queue = PrefillBootstrapQueue(
                 token_to_kv_pool=self.token_to_kv_pool_allocator.get_kvcache(),
                 req_to_metadata_buffer_idx_allocator=req_to_metadata_buffer_idx_allocator,
@@ -612,6 +618,7 @@ class Scheduler(
                 scheduler=self,
             )
             # The prefill requests that are in the middle of kv sending
+            # todo 进行 kv cache 传输的请求队列
             self.disagg_prefill_inflight_queue: List[Req] = []
 
     @DynamicGradMode()
@@ -1212,6 +1219,7 @@ class Scheduler(
             lora_set = set([req.lora_path for req in self.running_batch.reqs])
 
         # Get requests from the waiting queue to a new prefill batch
+        # todo 处理请求
         for req in self.waiting_queue:
             if (
                 self.lora_paths
@@ -1280,6 +1288,7 @@ class Scheduler(
             self.log_prefill_stats(adder, can_run_list, running_bs)
 
         # Create a new batch
+        # todo 创建一个ScheduleBatch
         new_batch = ScheduleBatch.init_new(
             can_run_list,
             self.req_to_token_pool,
@@ -2017,8 +2026,9 @@ def run_scheduler_process(
                 "max_req_input_len": scheduler.max_req_input_len,
             }
         )
+        # todo分离模型
         disaggregation_mode: DisaggregationMode = scheduler.disaggregation_mode
-
+        # todo 非分离模式！！！！！！
         if disaggregation_mode == DisaggregationMode.NULL:
             if scheduler.enable_overlap:
                 # todo 异步调度循环，能够重叠执行CPU处理与GPU计算，提升效率。
@@ -2026,11 +2036,13 @@ def run_scheduler_process(
             else:
                 # todo 正常的调度循环，依次接收请求、处理请求、执行批次并生成结果。
                 scheduler.event_loop_normal()
+        # todo 分离模式的prefill阶段！！！！！！
         elif disaggregation_mode == DisaggregationMode.PREFILL:
             if scheduler.enable_overlap:
                 scheduler.event_loop_overlap_disagg_prefill()
             else:
                 scheduler.event_loop_normal_disagg_prefill()
+        # todo 分离模式的decode阶段！！！！！！
         elif disaggregation_mode == DisaggregationMode.DECODE:
             if scheduler.enable_overlap:
                 scheduler.event_loop_overlap_disagg_decode()

@@ -169,20 +169,23 @@ class PrefillBootstrapQueue:
 
         return bootstrapped_reqs
 
-
+# todo 分离模式的prefill阶段
 class SchedulerDisaggregationPrefillMixin:
     """
     Mixin for Scheduler to handle disaggregation prefill
     """
-
+    # todo 调度分离模式prefill阶段
     @torch.no_grad()
     def event_loop_normal_disagg_prefill(self):
         """A normal scheduler loop for prefill worker in disaggregation mode."""
 
         while True:
             recv_reqs = self.recv_requests()
+            # todo 处理请求
             self.process_input_requests(recv_reqs)
+            # todo
             self.waiting_queue.extend(
+                # todo PD 节点配对的请求队列
                 self.disagg_prefill_pending_queue.pop_bootstrapped()
             )
             self.process_prefill_chunk()
@@ -191,6 +194,7 @@ class SchedulerDisaggregationPrefillMixin:
 
             if batch:
                 result = self.run_batch(batch)
+                # todo 发送kv cache数据！！！！！！
                 self.process_batch_result_disagg_prefill(batch, result)
 
             if len(self.disagg_prefill_inflight_queue) > 0:
@@ -274,7 +278,9 @@ class SchedulerDisaggregationPrefillMixin:
                 # There is no output_ids for prefill
                 req.output_ids.append(next_token_id)
                 self.tree_cache.cache_unfinished_req(req)  # update the tree and lock
+                # todo 发送kv数据
                 self.send_kv_chunk(req, token_id=next_token_id)
+                # todo 添加到prefill进行 kv cache 传输的请求队列
                 self.disagg_prefill_inflight_queue.append(req)
             else:
                 # being chunked reqs' prefill is not finished
@@ -387,7 +393,7 @@ class SchedulerDisaggregationPrefillMixin:
                 f"Skip sending kv chunk for request {req.rid=} {req.bootstrap_room=} because page_indices is empty"
             )
             return
-
+        # todo 通过MooncakeKVSender来发送
         req.disagg_kv_sender.send(
             page_indices, slice(page_start_idx, page_end_idx), last_chunk
         )

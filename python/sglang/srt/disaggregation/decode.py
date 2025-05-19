@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 @dataclass
 class DecodeRequest:
     req: Req
-    kv_receiver: BaseKVReceiver
+    kv_receiver: BaseKVReceiver # todo MooncakeKVReceiver，一个请求对应一个receiver
     waiting_for_input: bool = False
     metadata_buffer_index: int = -1
 
@@ -74,12 +74,13 @@ class DecodePreallocQueue:
         metadata_buffers: List[torch.Tensor],
         aux_dtype: torch.dtype,
         scheduler: Scheduler,
-        transfer_queue: DecodeTransferQueue,
+        transfer_queue: DecodeTransferQueue, # todo 持有DecodeTransferQueue队列
         tree_cache: BasePrefixCache,
         gloo_group: ProcessGroup,
         tp_rank: int,
         tp_size: int,
         bootstrap_port: int,
+        # todo 默认使用mooncake
         transfer_backend: TransferBackend,
     ):
         self.req_to_token_pool = req_to_token_pool
@@ -101,6 +102,7 @@ class DecodePreallocQueue:
         # Queue for requests pending pre-allocation
         self.queue: List[DecodeRequest] = []
         self.transfer_backend = transfer_backend
+        # todo 初始化MooncakeKVManager
         self.kv_manager = self._init_kv_manager()
 
     def _init_kv_manager(self) -> BaseKVManager:
@@ -153,7 +155,7 @@ class DecodePreallocQueue:
 
         if all(decode_req.waiting_for_input for decode_req in self.queue):
             return
-
+        # todo 更新请求状态
         polls = poll_and_all_reduce(
             [decode_req.kv_receiver for decode_req in self.queue], self.gloo_group
         )
@@ -210,7 +212,9 @@ class DecodePreallocQueue:
             page_indices = kv_to_page_indices(
                 kv_indices, self.token_to_kv_pool_allocator.page_size
             )
+            # todo kv_receiver初始化
             decode_req.kv_receiver.init(page_indices, decode_req.metadata_buffer_index)
+            # todo 加入请求
             preallocated_reqs.append(decode_req)
             indices_to_remove.add(i)
 
@@ -284,7 +288,7 @@ class DecodePreallocQueue:
 
         return kv_loc
 
-
+# todo 接收 kv cache 传输的请求队列
 class DecodeTransferQueue:
     """
     Store the requests that is polling kv
@@ -296,6 +300,7 @@ class DecodeTransferQueue:
         req_to_metadata_buffer_idx_allocator: ReqToMetadataIdxAllocator,
         metadata_buffers: torch.Tensor,
     ):
+        # todo 实际队列
         self.queue: List[DecodeRequest] = []
         self.gloo_group = gloo_group
         self.req_to_metadata_buffer_idx_allocator = req_to_metadata_buffer_idx_allocator
@@ -310,7 +315,7 @@ class DecodeTransferQueue:
     def pop_transferred(self) -> List[Req]:
         if not self.queue:
             return []
-
+        # todo 处理kv receiver状态数据
         polls = poll_and_all_reduce(
             [decode_req.kv_receiver for decode_req in self.queue], self.gloo_group
         )
@@ -330,6 +335,7 @@ class DecodeTransferQueue:
                 assert len(decode_req.req.output_ids) == 0
                 assert decode_req.req.transferred_output_id is None
                 decode_req.req.transferred_output_id = output_id
+                # todo kvcache结果
                 transferred_reqs.append(decode_req.req)
                 indices_to_remove.add(i)
             elif poll in [
@@ -441,7 +447,7 @@ class ScheduleBatchDisaggregationDecodeMixin:
             self.tree_cache.cache_unfinished_req(req)
         self.output_ids = torch.tensor(self.output_ids, device=self.device)
 
-
+# todo pf分离decode
 class SchedulerDisaggregationDecodeMixin:
 
     @torch.no_grad()
@@ -601,6 +607,7 @@ class SchedulerDisaggregationDecodeMixin:
     def process_decode_queue(self: Scheduler):
         req_conns = self.disagg_decode_prealloc_queue.pop_preallocated()
         self.disagg_decode_transfer_queue.extend(req_conns)
+        # todo 获取kvcache结果
         alloc_reqs = (
             self.disagg_decode_transfer_queue.pop_transferred()
         )  # the requests which kv has arrived
