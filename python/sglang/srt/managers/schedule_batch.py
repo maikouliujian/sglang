@@ -694,8 +694,11 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
 
     # Request, memory pool, and cache
     reqs: List[Req]
+    # todo 请求->token
     req_to_token_pool: ReqToTokenPool = None
+    # todo token-> kv pool
     token_to_kv_pool_allocator: TokenToKVPoolAllocator = None
+    # todo tree cache
     tree_cache: BasePrefixCache = None
 
     # Batch configs

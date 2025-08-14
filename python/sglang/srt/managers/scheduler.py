@@ -686,6 +686,7 @@ class Scheduler(
 
     def recv_requests(self) -> List[Req]:
         """Receive results at tp_rank = 0 and broadcast it to all other TP ranks."""
+        # todo 只有rank0会读取请求
         if self.attn_tp_rank == 0:
             recv_reqs = []
 
@@ -739,6 +740,7 @@ class Scheduler(
                 )
             recv_reqs = work_reqs + control_reqs
         elif self.tp_size != 1:
+            # todo 将请求广播到其他rank
             recv_reqs = broadcast_pyobj(recv_reqs, self.tp_rank, self.tp_cpu_group)
         return recv_reqs
     # todo 处理不同的请求
@@ -1175,7 +1177,7 @@ class Scheduler(
             ret, _ = self.prepare_dp_attn_batch(ret)
 
         return ret
-
+    # todo 获取新的prefill
     def get_new_batch_prefill(self) -> Optional[ScheduleBatch]:
         # Check if the grammar is ready in the grammar queue
         if self.grammar_queue:
@@ -1299,6 +1301,7 @@ class Scheduler(
             self.spec_algorithm,
             self.server_args.enable_custom_logit_processor,
         )
+        # todo prefill
         new_batch.prepare_for_extend()
 
         # Mixed-style chunked prefill
@@ -1982,7 +1985,7 @@ def _import_static_state(model, static_params):
     for name, tensor in static_params["buffers"]:
         self_named_buffers[name][...] = tensor
 
-# todo 调度器进程
+# todo 调度器进程！！！！！！！
 def run_scheduler_process(
     server_args: ServerArgs,
     port_args: PortArgs,
