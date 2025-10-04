@@ -208,7 +208,8 @@ set(SOURCES
     "${repo-flash-attention_SOURCE_DIR}/csrc/flash_attn/src/flash_fwd_sparse_hdim128_fp16_sm80.cu"
     "${repo-flash-attention_SOURCE_DIR}/csrc/flash_attn/flash_sparse_api.cpp"
 )
-
+# todo 声明一个名为 common_ops 的 Python 动态库（.so 文件）
+# todo 必须与 REGISTER_EXTENSION(common_ops) 一致
 Python_add_library(common_ops MODULE USE_SABI ${SKBUILD_SABI_VERSION} WITH_SOABI ${SOURCES})
 
 target_compile_options(common_ops PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:${SGL_KERNEL_CUDA_FLAGS}>)

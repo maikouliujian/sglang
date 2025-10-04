@@ -39,7 +39,7 @@ def build_tree_kernel_efficient_preprocess(
 
     return parent_list, top_scores_index, draft_tokens
 
-
+# todo 构建draft tree
 def build_tree_kernel_efficient(
     verified_id: torch.Tensor,
     score_list: List[torch.Tensor],

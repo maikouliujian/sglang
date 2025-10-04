@@ -51,6 +51,7 @@ else:
     from vllm._custom_ops import awq_dequantize
 
 
+# todo deepseek nextn 【mtp module】
 class DeepseekModelNextN(nn.Module):
     def __init__(
         self,
@@ -123,7 +124,7 @@ class DeepseekModelNextN(nn.Module):
             hidden_states, _ = self.shared_head.norm(hidden_states, residual)
         return hidden_states
 
-
+# todo deepseek nextn
 class DeepseekV3ForCausalLMNextN(DeepseekV3ForCausalLM):
 
     def __init__(
@@ -207,6 +208,7 @@ class DeepseekV3ForCausalLMNextN(DeepseekV3ForCausalLM):
                 continue
 
             # Use shared head and embed weights from target model
+            # todo 共享！！！！！！shared_head.head 和 embed_tokens 权重是共享的！！！！！！
             if "shared_head.head" in name or "embed_tokens" in name:
                 continue
 

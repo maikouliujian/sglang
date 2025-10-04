@@ -1,7 +1,7 @@
 # SGLang public APIs
 
 # Frontend Language APIs
-from sglang.api import (
+from .api import (
     Engine,
     Runtime,
     assistant,
@@ -24,15 +24,15 @@ from sglang.api import (
     user_end,
     video,
 )
-from sglang.global_config import global_config
-from sglang.lang.backend.runtime_endpoint import RuntimeEndpoint
-from sglang.lang.choices import (
+from .global_config import global_config
+from .lang.backend.runtime_endpoint import RuntimeEndpoint
+from .lang.choices import (
     greedy_token_selection,
     token_length_normalized,
     unconditional_likelihood_normalized,
 )
-from sglang.utils import LazyImport
-from sglang.version import __version__
+from .utils import LazyImport
+from .version import __version__
 
 ServerArgs = LazyImport("sglang.srt.server_args", "ServerArgs")
 Anthropic = LazyImport("sglang.lang.backend.anthropic", "Anthropic")

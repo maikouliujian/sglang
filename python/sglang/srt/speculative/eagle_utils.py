@@ -174,7 +174,7 @@ class EagleVerifyOutput:
     # Accepeted indices from logits_output.next_token_logits
     accepeted_indices: torch.Tensor
 
-
+# todo Eagle 校验
 @dataclass
 class EagleVerifyInput:
     draft_token: torch.Tensor
@@ -208,6 +208,7 @@ class EagleVerifyInput:
             retrive_next_token,
             retrive_next_sibling,
             draft_tokens,
+        # todo 构建draft tree
         ) = build_tree_kernel_efficient(
             verified_id,
             score_list,
@@ -300,7 +301,8 @@ class EagleVerifyInput:
             req_to_token.size(1),
         )
         return kv_indices, cum_kv_seq_len, qo_indptr, self.custom_mask
-
+    # todo 校验！！！！！！
+    # todo 这是一个推测解码的验证器，用于比较目标模型(target model)和草稿模型(draft model)的预测结果，决定哪些草稿token可以被接受。
     def verify(
         self,
         batch: ScheduleBatch,
@@ -321,7 +323,7 @@ class EagleVerifyInput:
         bs = self.retrive_index.shape[0]
         candidates = self.draft_token.reshape(bs, self.draft_token_num)
         sampling_info = batch.sampling_info
-
+        # todo 分配预测结果、接受索引和接受长度的张量
         predict_shape = list(logits_output.next_token_logits.shape)[:-1]
         predict_shape[-1] += 1
         predict = torch.empty(predict_shape, dtype=torch.int32, device="cuda")
@@ -347,7 +349,7 @@ class EagleVerifyInput:
         if batch.sampling_info.is_all_greedy:
             target_predict = torch.argmax(logits_output.next_token_logits, dim=-1)
             target_predict = target_predict.reshape(bs, self.draft_token_num)
-
+            # todo 校验draft tree
             verify_tree_greedy(
                 predicts=predict,  # mutable
                 accept_index=accept_index,  # mutable
@@ -433,6 +435,7 @@ class EagleVerifyInput:
                 # if not found_finished:
                 req.output_ids.append(id)
                 req.check_finished()
+                # todo 检查是否生成结束token
                 if req.finished():
                     has_finished = True
                     # set all tokens after finished token to -1 and break
@@ -449,6 +452,7 @@ class EagleVerifyInput:
             accept_length = (accept_index != -1).sum(dim=1) - 1
 
         # Free the KV cache for unaccepted tokens
+        # todo 释放未被接受的token的KV缓存
         accept_index = accept_index[accept_index != -1]
         verified_id = predict[accept_index]
         evict_mask = torch.full_like(self.draft_token, True, dtype=torch.bool)

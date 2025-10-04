@@ -146,6 +146,7 @@ void build_tree_kernel_efficient(
       int32_t(draft_token_num));
 }
 
+//todo kernel函数
 template <typename IdType>
 __global__ void VerifyTreeGreedy(
     IdType* predicts,
@@ -198,6 +199,7 @@ __global__ void VerifyTreeGreedy(
 // retrive_next_token: [bs, num_draft_tokens]
 // retrive_next_sibling: [bs, num_draft_tokens]
 // target_predict: [bs, num_draft_tokens]
+//todo 校验draft tree
 void verify_tree_greedy(
     at::Tensor predicts,
     at::Tensor accept_index,

@@ -11,6 +11,7 @@ if __name__ == "__main__":
     server_args = prepare_server_args(sys.argv[1:])
 
     try:
+        # todo 服务启动入口！！！！！！
         launch_server(server_args)
     finally:
         kill_process_tree(os.getpid(), include_parent=False)

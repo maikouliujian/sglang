@@ -864,7 +864,7 @@ def set_weight_attrs(
         assert not hasattr(weight, key), f"Overwriting existing tensor attribute: {key}"
         setattr(weight, key, value)
 
-
+# todo 广播数据
 def broadcast_pyobj(
     data: List[Any],
     rank: int,

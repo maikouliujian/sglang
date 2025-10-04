@@ -676,7 +676,7 @@ def _create_error_response(e):
         {"error": {"message": str(e)}}, status_code=HTTPStatus.BAD_REQUEST
     )
 
-
+# todo启动服务
 def launch_server(
     server_args: ServerArgs,
     pipe_finish_writer: Optional[multiprocessing.connection.Connection] = None,
@@ -697,6 +697,7 @@ def launch_server(
     1. The HTTP server, Engine, and TokenizerManager both run in the main process.
     2. Inter-process communication is done through IPC (each process uses a different port) via the ZMQ library.
     """
+    # todo 启动进程
     tokenizer_manager, scheduler_info = _launch_subprocesses(server_args=server_args)
     set_global_state(
         _GlobalState(

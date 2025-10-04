@@ -34,7 +34,7 @@ def tree_speculative_sampling_target_only(
         get_cuda_stream(),
     )
 
-
+# todo 校验draft tree
 def verify_tree_greedy(
     predicts: torch.Tensor,  # mutable
     accept_index: torch.Tensor,  # mutable

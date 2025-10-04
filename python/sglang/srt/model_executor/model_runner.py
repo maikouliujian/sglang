@@ -737,7 +737,7 @@ class ModelRunner:
         )
         max_num_token = int(rest_memory * (1 << 30) // cell_size)
         return max_num_token
-
+    # todo 初始化内存池
     def init_memory_pool(
         self,
         total_gpu_memory: int,

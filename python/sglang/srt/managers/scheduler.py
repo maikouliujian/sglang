@@ -273,6 +273,7 @@ class Scheduler(
         # Launch a draft worker for speculative decoding
         # todo Speculative Decoding ！！！！！！
         if self.spec_algorithm.is_eagle():
+            # todo # launch draft model for speculative decoding
             from sglang.srt.speculative.eagle_worker import EAGLEWorker
 
             self.draft_worker = EAGLEWorker(
@@ -1389,6 +1390,7 @@ class Scheduler(
                     next_token_ids,
                     bid,
                     num_accepted_tokens,
+                    # todo """ 注意，这里是 一个 投机采样 step，即可能生成 K 个 draft tokens here """
                 ) = self.draft_worker.forward_batch_speculative_generation(batch)
                 self.spec_num_total_accepted_tokens += (
                     num_accepted_tokens + batch.batch_size()

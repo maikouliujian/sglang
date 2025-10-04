@@ -232,7 +232,7 @@ class EAGLEWorker(TpModelWorker):
     @property
     def draft_model_runner(self):
         return self.model_runner
-
+    # todo  """ 注意，这里是 一个 投机采样 step，即可能生成 K 个 draft tokens here """
     def forward_batch_speculative_generation(
         self, batch: ScheduleBatch
     ) -> Tuple[LogitsProcessorOutput, List[int], int, int]:
@@ -247,9 +247,12 @@ class EAGLEWorker(TpModelWorker):
             A tuple of the final logit output of the target model, next tokens accepeted,
             the batch id (used for overlap schedule), and number of accepeted tokens.
         """
+        # todo decode阶段！！！！！！
         if batch.forward_mode.is_decode():
             with self.draft_tp_context(self.draft_model_runner.tp_group):
+                # todo draft forward，构建draft tree
                 spec_info = self.draft(batch)
+            # todo 主模型校验
             logits_output, verify_output, model_worker_batch = self.verify(
                 batch, spec_info
             )
@@ -401,10 +404,11 @@ class EAGLEWorker(TpModelWorker):
                 model_worker_batch, self.draft_model_runner
             )
             # Run forward steps
+            # todo draft_forward！！！！！！！
             score_list, token_list, parents_list = self.draft_forward(forward_batch)
 
         self.token_to_kv_pool_allocator.restore_state(token_to_kv_pool_state_backup)
-
+        # todo todo create() 将基于 draft_forward() 中 multi-step 生成的 draft token lists 构建一颗draft tree，其将用于验证环节，确定最终接收的tokens 序列
         ret = EagleVerifyInput.create(
             spec_info.verified_id,
             score_list,
@@ -417,11 +421,18 @@ class EAGLEWorker(TpModelWorker):
             self.server_args.speculative_num_draft_tokens,
         )
         return ret
-
+    # todo 在生成文本时，草稿模型（Draft Model）快速预测多个可能的后续token（候选路径），
+    #  主模型（Main Model）随后验证这些预测，避免主模型逐token生成的低效问题
     def draft_forward(self, forward_batch: ForwardBatch):
         # Parse args
         spec_info = forward_batch.spec_info
         out_cache_loc = forward_batch.out_cache_loc
+        """
+        假如：
+        speculative_num_steps = 3（生成3个token候选）
+        topk = 2（每步保留top2概率的token）
+        batch_size = 1（单条输入）
+        """
         topk_p, topk_index, hidden_states = (
             spec_info.topk_p,
             spec_info.topk_index,
@@ -434,7 +445,19 @@ class EAGLEWorker(TpModelWorker):
         score_list: List[torch.Tensor] = []
         token_list: List[torch.Tensor] = []
         parents_list: List[torch.Tensor] = []
-
+        """
+        如果编译3次后
+        token_list = [
+    [33, 1240],
+    [223, 19825, 1999, 28231],
+    [21, 20, 22, 19, 411, 7165, 270, 260]  # topk^3=8个候选
+     ]
+    parents_list = [
+    [0, 0],
+    [0, 0, 1, 1],
+    [0, 0, 1, 1, 2, 2, 3, 3]  # 对应第2步的候选索引
+     ]
+        """
         # Forward multiple steps
         scores = None
         for i in range(self.speculative_num_steps):
@@ -460,6 +483,7 @@ class EAGLEWorker(TpModelWorker):
             spec_info.hidden_states = hidden_states
 
             # Run forward
+            # todo draft model forward
             logits_output = self.draft_model_runner.model.forward(
                 forward_batch.input_ids, forward_batch.positions, forward_batch
             )
@@ -469,7 +493,7 @@ class EAGLEWorker(TpModelWorker):
             if self.hot_token_id is not None:
                 topk_index = self.hot_token_id[topk_index]
             hidden_states = logits_output.hidden_states
-
+        # todo num_steps=3, token_list 类似：[DEBUG Draft_FWD] multi-steps draft token list: [tensor([  33, 1240, 2755,   14]),  tensor([  223, 19825,  1999, 28231,   372,   795,    19,     5,    19,    20, 223,    21,   305,   260, 42577,  1952]), tensor([  21,   20,   22,   19,  411, 7165,  270,  260,  344,  477, 1951,  696, 270,  305,   16,  223])]
         return score_list, token_list, parents_list
 
     def verify(self, batch: ScheduleBatch, spec_info: EagleVerifyInput):
@@ -477,11 +501,14 @@ class EAGLEWorker(TpModelWorker):
         batch.forward_mode = ForwardMode.TARGET_VERIFY
         batch.spec_info = spec_info
         model_worker_batch = batch.get_model_worker_batch()
+        # todo target model forward
         logits_output, _ = self.target_worker.forward_batch_generation(
             model_worker_batch, skip_sample=True
         )
         self._detect_nan_if_needed(logits_output)
         spec_info.hidden_states = logits_output.hidden_states
+        # todo 注意， 在default multi-steps下， draft_tokens_list 是多步生成的；而 target_model.fwd(batch) + spec_info.verify()
+        #  只跑了一步。这里正是投机采样发挥性能优势的点
         res: EagleVerifyOutput = spec_info.verify(
             batch,
             logits_output,

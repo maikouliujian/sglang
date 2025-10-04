@@ -1,6 +1,6 @@
 from enum import IntEnum, auto
 
-
+# todo 推测算法
 class SpeculativeAlgorithm(IntEnum):
     NONE = auto()
     EAGLE = auto()

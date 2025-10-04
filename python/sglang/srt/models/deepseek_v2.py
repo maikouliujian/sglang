@@ -1152,6 +1152,7 @@ class DeepseekV2DecoderLayer(nn.Module):
 
     @staticmethod
     def _compute_info(config: PretrainedConfig, layer_id: int, is_nextn: bool):
+        # todo 判断是否稀疏(前 first_k_dense_replace 层是dense)
         is_sparse = is_nextn or (
             config.n_routed_experts is not None
             and layer_id >= config.first_k_dense_replace
