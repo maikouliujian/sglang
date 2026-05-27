@@ -676,7 +676,7 @@ async def clear_hicache_storage_backend():
         status_code=200 if ret.success else HTTPStatus.BAD_REQUEST,
     )
 
-
+# todo 开启打profiling！！！！！！
 @app.api_route("/start_profile", methods=["GET", "POST"])
 async def start_profile_async(obj: Optional[ProfileReqInput] = None):
     """Start profiling."""
@@ -700,7 +700,7 @@ async def start_profile_async(obj: Optional[ProfileReqInput] = None):
         status_code=200,
     )
 
-
+# todo 结束打profiling！！！！！！
 @app.api_route("/stop_profile", methods=["GET", "POST"])
 async def stop_profile_async():
     """Stop profiling."""

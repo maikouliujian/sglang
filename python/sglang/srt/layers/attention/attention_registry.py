@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 ATTENTION_BACKENDS = {}
 
-
+# todo 注册attention
 def register_attention_backend(name):
     def decorator(fn):
         ATTENTION_BACKENDS[name] = fn

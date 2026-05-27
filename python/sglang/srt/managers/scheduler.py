@@ -453,6 +453,7 @@ class Scheduler(
         self._engine_paused = False
 
         # Init chunked prefill
+        # todo 初始化chunked-prefill-size
         self.chunked_prefill_size = server_args.chunked_prefill_size
         if self.dllm_config is not None:
             # We currently leverage chunked prefill to implement block diffusion
@@ -967,19 +968,23 @@ class Scheduler(
     def event_loop_normal(self):
         """A normal scheduler loop."""
         while True:
+            # todo 1. 接收请求
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
 
             if self._engine_paused:
                 continue
-
+            # todo 2. 获取下一个批次
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
 
             if batch:
+                # todo 3. 运行批次（GPU计算）
                 result = self.run_batch(batch)
+                # todo 4. 处理结果（CPU处理）
                 self.process_batch_result(batch, result)
             else:
+                # todo 5. 空闲时检查内存和休眠
                 # When the server is idle, do self-check and re-init some states
                 self.self_check_during_idle()
 
@@ -991,6 +996,7 @@ class Scheduler(
     @DynamicGradMode()
     def event_loop_overlap(self):
         """A scheduler loop that overlaps the CPU processing and GPU computation."""
+        """重叠调度循环"""
         self.result_queue: Deque[Tuple[ScheduleBatch, GenerationBatchResult]] = deque()
         disable_consecutive_prefill_overlap = (
             envs.SGLANG_DISABLE_CONSECUTIVE_PREFILL_OVERLAP.get()
@@ -1002,12 +1008,13 @@ class Scheduler(
             self.process_batch_result(tmp_batch, tmp_result)
 
         while True:
+            # todo 1. 接收请求
             recv_reqs = self.recv_requests()
             self.process_input_requests(recv_reqs)
 
             if self._engine_paused:
                 continue
-
+            # todo 2. 获取下一个批次
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
 
@@ -1033,9 +1040,10 @@ class Scheduler(
 
             batch_result = None
             if batch:
+                # todo 3. 启动GPU计算
                 batch_result = self.run_batch(batch)
                 self.result_queue.append((batch.copy(), batch_result))
-
+            # todo 5. 处理上一个批次的结果（与当前批次并行）
             if self.last_batch:
                 if not disable_overlap_for_batch and not need_grammar_sync:
                     pop_and_process()
@@ -1629,7 +1637,7 @@ class Scheduler(
         # Process each request in the batch
         for tokenized_req in recv_req:
             self.handle_embedding_request(tokenized_req)
-
+    # todo 获取下一批次去run
     def get_next_batch_to_run(self) -> Optional[ScheduleBatch]:
         if self.dllm_config is not None:
             if self.chunked_req is not None and self.chunked_req.finished():
@@ -1671,7 +1679,7 @@ class Scheduler(
                 else:
                     # Merge running_batch with prefill batch
                     self.running_batch.merge_batch(self.last_batch)
-
+        # todo 获取下一批次的p
         new_batch = self.get_new_batch_prefill()
 
         need_mlp_sync = self.require_mlp_sync
@@ -1751,6 +1759,7 @@ class Scheduler(
             return None
 
         # Prefill policy
+        # todo prefill策略
         adder = PrefillAdder(
             self.page_size,
             self.tree_cache,
@@ -1765,6 +1774,7 @@ class Scheduler(
 
         if self.chunked_req is not None:
             self.chunked_req.init_next_round_input()
+            # todo 添加chunk req
             self.chunked_req = adder.add_chunked_req(self.chunked_req)
 
         if self.enable_lora:
@@ -2593,7 +2603,7 @@ def is_work_request(recv_req):
         ),
     )
 
-
+# todo 运行调度进程
 def run_scheduler_process(
     server_args: ServerArgs,
     port_args: PortArgs,
@@ -2650,6 +2660,7 @@ def run_scheduler_process(
 
     # Create a scheduler and run the event loop
     try:
+        # todo 调度器！！！！！！
         scheduler = Scheduler(
             server_args,
             port_args,
@@ -2668,14 +2679,17 @@ def run_scheduler_process(
         )
 
         disaggregation_mode: DisaggregationMode = scheduler.disaggregation_mode
+        # todo 非pd分离！！！！！！
         if disaggregation_mode == DisaggregationMode.NULL:
             if scheduler.enable_pdmux:
                 scheduler.event_loop_pdmux()
             elif server_args.pp_size > 1:
                 scheduler.event_loop_pp()
             elif scheduler.enable_overlap:
+                # todo 重叠调度
                 scheduler.event_loop_overlap()
             else:
+                # todo 普通的调度
                 scheduler.event_loop_normal()
         elif disaggregation_mode == DisaggregationMode.PREFILL:
             if scheduler.enable_overlap:

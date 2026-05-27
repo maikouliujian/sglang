@@ -316,7 +316,7 @@ class AddReqResult(Enum):
     NO_TOKEN = auto()  # No token left
     OTHER = auto()  # Other reasons to stop adding requests
 
-
+# todo p的调度策略！！！！！！
 class PrefillAdder:
     def __init__(
         self,
@@ -325,8 +325,8 @@ class PrefillAdder:
         token_to_kv_pool_allocator: BaseTokenToKVPoolAllocator,
         running_batch: ScheduleBatch,
         new_token_ratio: float,
-        rem_input_tokens: int,
-        rem_chunk_tokens: Optional[int],
+        rem_input_tokens: int, # todo max_prefill_tokens
+        rem_chunk_tokens: Optional[int], # todo chunked_prefill_size
         mixed_with_decode_tokens: int = 0,
         priority_scheduling_preemption_threshold: int = 0,
     ):
@@ -457,6 +457,7 @@ class PrefillAdder:
         req.extend_input_len = min(req.extend_input_len, _rem_tokens)
         req.fill_ids = req.fill_ids[: len(req.prefix_indices) + req.extend_input_len]
         self.can_run_list.append(req)
+        # todo 更新prefill配额
         self._update_prefill_budget(
             0,
             req.extend_input_len,

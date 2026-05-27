@@ -512,6 +512,7 @@ class ModelRunner:
             server_args.max_total_tokens,
         )
         if self.device == "cuda":
+            # todo 初始化！！！！！！
             self.init_cublas()
             self.init_attention_backend()
             self.kernel_warmup()

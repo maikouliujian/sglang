@@ -105,6 +105,7 @@ QUANTIZATION_CHOICES = [
     "compressed-tensors",  # for Ktransformers
 ]
 
+# todo attention backend
 ATTENTION_BACKEND_CHOICES = [
     # Common
     "triton",
@@ -213,7 +214,7 @@ def add_rl_on_policy_target_choices(choices):
 def add_mamba_ssm_dtype_choices(choices):
     MAMBA_SSM_DTYPE_CHOICES.extend(choices)
 
-
+# todo 服务端参数！！！！！！
 @dataclasses.dataclass
 class ServerArgs:
     """

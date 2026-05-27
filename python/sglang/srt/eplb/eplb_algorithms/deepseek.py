@@ -79,7 +79,7 @@ def replicate_experts(
         logcnt[arangen, redundant_indices] += 1
     return phy2log, rank, logcnt
 
-
+# todo 均衡专家！！！！！！
 def rebalance_experts_hierarchical(
     weight: torch.Tensor,
     num_physical_experts: int,
@@ -164,7 +164,7 @@ def rebalance_experts_hierarchical(
     logcnt = mlogcnt.view(num_layers, -1).gather(-1, log2mlog)
     return pphy2log, pphyrank, logcnt
 
-
+# todo 均衡专家
 def rebalance_experts(
     weight: torch.Tensor,
     num_replicas: int,
