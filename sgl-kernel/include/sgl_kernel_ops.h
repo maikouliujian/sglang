@@ -380,6 +380,7 @@ void cutlass_w4a8_moe_mm(
 /*
  * From csrc/speculative
  */
+
 void tree_speculative_sampling_target_only(
     at::Tensor predicts,          // mutable
     at::Tensor accept_index,      // mutable

@@ -123,6 +123,7 @@ void tree_speculative_sampling_target_only(
   CHECK_GE(threshold_acc, 0);
   CHECK_GE(1, threshold_acc);
 
+
   cudaStream_t stream = at::cuda::getCurrentCUDAStream();
   cudaError_t status = sampling::TreeSpeculativeSamplingTargetOnly<float, int32_t, int64_t>(
       static_cast<int32_t*>(predicts.data_ptr()),
