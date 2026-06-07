@@ -91,7 +91,7 @@ def match_prefix_for_req(
 ):
     if token_ids is None:
         token_ids = req.origin_input_ids + req.output_ids
-
+    # todo
     match_result = tree_cache.match_prefix(
         MatchPrefixParams(
             key=RadixKey(token_ids=token_ids, extra_key=req.extra_key),
@@ -171,8 +171,10 @@ class SchedulePolicy:
         policy = self._determine_active_policy(waiting_queue)
 
         prefix_computed = False
+        # todo 缓存感知调度策略！！！！！！
         if isinstance(policy, CacheAwarePolicy):
             prefix_computed = True
+            # todo 计算前缀匹配！！！！！！按照匹配最长的进行调度！！！！！！
             temporary_deprioritized = self._compute_prefix_matches(
                 waiting_queue, policy
             )
@@ -239,6 +241,7 @@ class SchedulePolicy:
         for r in waiting_queue:
             prefix_ids = r.origin_input_ids + r.output_ids
             extra_key = r.extra_key
+            # todo 对请求计算prefix match
             match_result = match_prefix_for_req(self.tree_cache, r, prefix_ids)
 
             # NOTE(sang): This logic is for in-batch prefix caching;

@@ -132,6 +132,7 @@ Please consult the documentation below and [server_args.py](https://github.com/s
 | `--prefill-max-requests` | The maximum number of requests in a prefill batch. If not specified, there is no limit. | `None` | Type: int |
 | `--enable-dynamic-chunking` | Enable dynamic chunk size adjustment for pipeline parallelism. When enabled, chunk sizes are dynamically calculated based on fitted function to maintain consistent execution time across chunks. | `False` | bool flag (set to enable) |
 | `--max-prefill-tokens` | The maximum number of tokens in a prefill batch. The real bound will be the maximum of this value and the model's maximum context length. | `16384` | Type: int |
+
 | `--schedule-policy` | The scheduling policy of the requests. | `fcfs` | `lpm`, `random`, `fcfs`, `dfs-weight`, `lof`, `priority`, `routing-key` |
 | `--enable-priority-scheduling` | Enable priority scheduling. Requests with higher priority integer values will be scheduled first by default. | `False` | bool flag (set to enable) |
 | `--abort-on-priority-when-disabled` | If set, abort requests that specify a priority when priority scheduling is disabled. | `False` | bool flag (set to enable) |
@@ -141,6 +142,7 @@ Please consult the documentation below and [server_args.py](https://github.com/s
 | `--page-size` | The number of tokens in a page. | `1` | Type: int |
 | `--swa-full-tokens-ratio` | The ratio of SWA layer KV tokens / full layer KV tokens, regardless of the number of swa:full layers. It should be between 0 and 1. E.g. 0.5 means if each swa layer has 50 tokens, then each full layer has 100 tokens. | `0.8` | Type: float |
 | `--disable-hybrid-swa-memory` | Disable the hybrid SWA memory. | `False` | bool flag (set to enable) |
+
 | `--radix-eviction-policy` | The eviction policy of radix trees. 'lru' stands for Least Recently Used, 'lfu' stands for Least Frequently Used. | `lru` | `lru`, `lfu` |
 | `--enable-prefill-delayer` | Enable prefill delayer for DP attention to reduce idle time. | `False` | bool flag (set to enable) |
 | `--prefill-delayer-max-delay-passes` | Maximum forward passes to delay prefill. | `30` | Type: int |

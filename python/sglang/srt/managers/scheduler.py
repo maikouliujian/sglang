@@ -441,6 +441,7 @@ class Scheduler(
             time.sleep(t)
 
         # Init cache and memory pool
+        # todo 决定kvcache管理！！！！！！
         self.init_cache_with_memory_pool()
 
         # Register draft KV pool (when spec + HiCache co-enabled).
@@ -881,6 +882,7 @@ class Scheduler(
 
         if effective_chunked_prefill_size is not None and self.disable_radix_cache:
             if not self.is_hybrid_swa:
+                # todo 没有开启radix_cache时，使用radix_cache来管理kvcache
                 from sglang.srt.mem_cache.chunk_cache import ChunkCache
 
                 self.tree_cache = ChunkCache(params)
@@ -2663,6 +2665,7 @@ class Scheduler(
             return None
 
         # Get priority queue
+        # todo
         self.policy.calc_priority(self.waiting_queue, self.running_batch)
 
         if TEST_RETRACT and running_bs > TEST_RETRACT_NO_PREFILL_BS:

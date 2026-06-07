@@ -70,9 +70,11 @@ class RadixKey:
 
     def __init__(
         self,
-        token_ids: List[int],
-        extra_key: Optional[str] = None,
-        is_bigram: bool = False,
+        token_ids: List[int], # todo 原始 token ID 序列
+        # todo extra_key 做命名空间隔离：不同 LoRA adapter、不同 cache salt 的请求，即使 token 序列相同也不会互相污染缓存。
+            #  todo vLLM 也有类似能力（通过 generate_block_hash_extra_keys），但 SGLang 的隔离更干净——直接在树的 child key 里带上 namespace
+        extra_key: Optional[str] = None, # todo  # 命名空间隔离（LoRA ID / cache salt）
+        is_bigram: bool = False, # todo EAGLE 投机解码用的 bigram 模式
     ):
         # token ids sequence (raw ints in both modes)
         self.token_ids = token_ids
@@ -158,7 +160,7 @@ class RadixKey:
                 i += 1
             matched = max(0, min(i - 1, len(self), len(other)))
             return (matched // page_size) * page_size if page_size > 1 else matched
-
+        """返回两个 key 的公共前缀长度（向下对齐到 page_size）"""
         if page_size == 1:
             i = 0
             for a, b in zip(t0, t1):
@@ -202,7 +204,9 @@ class RadixKey:
                 hasher.update(t[j].to_bytes(4, byteorder="little", signed=False))
         return hasher.hexdigest()
 
-
+# todo SGLang kvcache 的最小管理单元
+# todo 注意这里面同时带了 LRU、LFU、FIFO、Priority 需要的所有元数据——last_access_time、hit_count、creation_time、priority。
+#  vLLM 的 KVCacheBlock 只有 LRU 需要的信息（通过链表位置隐含），所以它没法灵活切换策略。
 class TreeNode:
 
     counter = 0
@@ -210,22 +214,23 @@ class TreeNode:
     def __init__(self, id: Optional[int] = None, priority: int = 0):
         self.children = defaultdict(TreeNode)
         self.parent: TreeNode = None
-        self.key: RadixKey = None
-        self.value: Optional[torch.Tensor] = None
-        self.lock_ref = 0
-        self.last_access_time = time.monotonic()
-        self.creation_time = time.monotonic()
+        self.key: RadixKey = None # todo 该节点存储的 token 序列片段
+        # todo value 字段存的不是 KV 数据本身，而是指向 GPU 显存位置的索引 tensor。真正的 KV 数据在 MHATokenToKVPool 的 k_buffer / v_buffer 大 tensor 里。TreeNode 只管"哪些位置属于我"。
+        self.value: Optional[torch.Tensor] = None # todo KV Cache 索引（GPU 显存位置）
+        self.lock_ref = 0 # todo 锁计数：被多少活跃请求引用
+        self.last_access_time = time.monotonic() # todo LRU 时间戳
+        self.creation_time = time.monotonic() # todo 创建时间（FIFO 用）
 
-        self.hit_count = 0
+        self.hit_count = 0 # todo # 命中次数（LFU 用）
         # indicating the node is locked to protect from eviction
         # incremented when the node is referenced by a storage operation
         self.host_ref_counter = 0
         # store the host indices of KV cache
-        self.host_value: Optional[torch.Tensor] = None
+        self.host_value: Optional[torch.Tensor] = None # todo Host 内存备份（层级缓存）
         # store hash values of each pages
-        self.hash_value: Optional[List[str]] = None
+        self.hash_value: Optional[List[str]] = None # todo 可选的页哈希
         # priority for priority-aware eviction
-        self.priority = priority
+        self.priority = priority # todo # 优先级驱逐用
 
         self.id = TreeNode.counter if id is None else id
         TreeNode.counter += 1
@@ -290,7 +295,7 @@ class RadixCache(KVCacheEventMixin, BasePrefixCache):
                 self.device = torch.device("cpu")
         else:
             self.device = torch.device("cpu")
-
+        # todo RadixCache的7中驱逐策略！！！！！！！
         if self.eviction_policy == "lru":
             self.eviction_strategy: EvictionStrategy = LRUStrategy()
         elif self.eviction_policy == "lfu":
@@ -572,11 +577,12 @@ class RadixCache(KVCacheEventMixin, BasePrefixCache):
         num_evicted = 0
         while num_evicted < num_tokens and len(eviction_heap):
             _priority, x = heapq.heappop(eviction_heap)
-
+            # todo # 释放 KV slots
             self.token_to_kv_pool_allocator.free(x.value)
             num_evicted += len(x.value)
+            # todo # 从树里删除叶子
             self._delete_leaf(x)
-
+            # todo # 如果父节点变成了新的叶子，推入堆中
             if len(x.parent.children) == 0 and x.parent.lock_ref == 0:
                 new_priority = self.eviction_strategy.get_priority(x.parent)
                 heapq.heappush(eviction_heap, (new_priority, x.parent))
@@ -598,7 +604,7 @@ class RadixCache(KVCacheEventMixin, BasePrefixCache):
                 delta -= len(node.key)
             node.lock_ref += 1
             self._update_leaf_status(node)
-            node = node.parent
+            node = node.parent # todo # 一路锁到根！
         return IncLockRefResult(delta=delta)
 
     def dec_lock_ref(
@@ -641,7 +647,7 @@ class RadixCache(KVCacheEventMixin, BasePrefixCache):
         return torch.cat(values)
 
     ##### Internal Helper Functions #####
-
+    # todo 前缀匹配的核心逻辑!!!!!!
     def _match_prefix_helper(self, node: TreeNode, key: RadixKey):
         access_time = time.monotonic()
         node.last_access_time = access_time
@@ -654,11 +660,13 @@ class RadixCache(KVCacheEventMixin, BasePrefixCache):
             child.last_access_time = access_time
             prefix_len = child.key.match(key, page_size=self.page_size)
             if prefix_len < len(child.key):
+                # todo # 匹配在节点中间结束 → 分裂节点
                 new_node = self._split_node(child.key, child, prefix_len)
                 value.append(new_node.value)
                 node = new_node
                 break
             else:
+                # todo # 完整匹配这个节点 → 收集 KV 索引，继续往下走
                 value.append(child.value)
                 node = child
                 key = key[prefix_len:]
@@ -667,7 +675,40 @@ class RadixCache(KVCacheEventMixin, BasePrefixCache):
                     child_key = key.child_key(self.page_size)
 
         return value, node
-
+    """
+    ┌─────────────────────────────────────────────────────────────────────────┐
+│              Radix Tree 节点分裂 (_split_node)                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  场景：树里已有路径 [A,B,C,D,E]，新请求匹配了 [A,B] 就分叉了           │
+│                                                                         │
+│  分裂前：                          分裂后：                             │
+│                                                                         │
+│      root                              root                             │
+│       │                                 │                               │
+│       ▼                                 ▼                               │
+│  ┌─────────────┐                  ┌─────────┐                          │
+│  │key=[A,B,C,D,E]│                  │key=[A,B] │ ← new_node            │
+│  │value=[i0..i4] │                  │value=[i0,i1]│                     │
+│  │lock_ref=0     │                  │lock_ref=0   │                     │
+│  └─────────────┘                  └─────┬───┘                          │
+│                                         │                               │
+│                                         ▼                               │
+│                                    ┌─────────────┐                      │
+│                                    │key=[C,D,E]   │ ← 原节点（截断）    │
+│                                    │value=[i2,i3,i4]│                    │
+│                                    │lock_ref=0      │                    │
+│                                    └─────────────┘                      │
+│                                                                         │
+│  _split_node 源码核心：                                                  │
+│    new_node.key = child.key[:split_len]      # 前半段给新节点           │
+│    new_node.value = child.value[:split_len]  # KV 索引也分割            │
+│    child.key = child.key[split_len:]         # 后半段留在原节点         │
+│    child.value = child.value[split_len:]     # 对应索引也截断           │
+│    new_node.children = {child_key: child}    # 原节点变成新节点的子节点 │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+    """
     def _split_node(self, key: RadixKey, child: TreeNode, split_len: int):
         # new_node -> child
         # New node inherits child's priority (represents shared prefix)
@@ -697,7 +738,35 @@ class RadixCache(KVCacheEventMixin, BasePrefixCache):
         if chunked:
             return
         node.hit_count += 1
-
+    """
+    ┌─────────────────────────────────────────────────────────────────────────┐
+│           _insert_helper 完整流程示意                                     │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  初始状态：                                                              │
+│      root ──▶ [Hello, World] (value=[i0, i1])                           │
+│                                                                         │
+│  插入 key=[Hello, SGLang, Rocks], value=[i0, i5, i6]                    │
+│                                                                         │
+│  Step 1: 走到 child，发现匹配长度=1 ("Hello") < 节点长度=2              │
+│  Step 2: _split_node → 分裂成 [Hello] 和 [World]                        │
+│  Step 3: key 还剩 [SGLang, Rocks]，树里没有 → 创建新叶子                │
+│                                                                         │
+│  最终状态：                                                              │
+│      root                                                               │
+│       │                                                                 │
+│       ▼                                                                 │
+│  [Hello] (value=[i0])       ← 共享前缀                                  │
+│       │                                                                 │
+│       ├──▶ [World] (value=[i1])          ← 旧路径                       │
+│       │                                                                 │
+│       └──▶ [SGLang, Rocks] (value=[i5,i6]) ← 新路径                    │
+│                                                                         │
+│  注意：i0 这个 KV slot 被两条路径共享——只存一份，不重复！              │
+│  这就是 Radix Tree 的核心价值。                                         │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+    """
     def _insert_helper(
         self,
         node: TreeNode,
@@ -712,11 +781,11 @@ class RadixCache(KVCacheEventMixin, BasePrefixCache):
         access_time = time.monotonic()
         node.last_access_time = access_time
         # Update priority along the path (take max to propagate higher priority)
-        node.priority = max(node.priority, priority)
+        node.priority = max(node.priority, priority) # todo # 优先级取 max 向上传播
         if len(key) == 0:
             return 0
 
-        child_key = key.child_key(self.page_size)
+        child_key = key.child_key(self.page_size) # todo # 取 key 的第一个 token 作为字典 key
 
         total_prefix_length = 0
         while len(key) > 0 and child_key in node.children.keys():
@@ -728,24 +797,26 @@ class RadixCache(KVCacheEventMixin, BasePrefixCache):
             value = value[prefix_len:]
 
             if prefix_len < len(node.key):
+                # todo 部分匹配 → 先分裂，再接着插入剩余部分
                 new_node = self._split_node(node.key, node, prefix_len)
                 new_node.priority = max(new_node.priority, priority)
                 self._inc_hit_count(new_node, chunked)
                 node = new_node
             else:
                 node.priority = max(node.priority, priority)
-                self._inc_hit_count(node, chunked)
+                self._inc_hit_count(node, chunked) # todo # LFU 计数
             if len(key):
                 child_key = key.child_key(self.page_size)
 
         if len(key):
+            # todo 树里没有这段 suffix → 创建新叶子
             new_node = TreeNode(priority=priority)
             new_node.parent = node
             new_node.key = key
             new_node.value = value.clone()
             self._inc_hit_count(new_node, chunked)
             node.children[child_key] = new_node
-            self.evictable_size_ += len(key)
+            self.evictable_size_ += len(key) # todo # 新增的部分可被驱逐
             self._update_leaf_status(node)
             self._update_leaf_status(new_node)
             # Hash will be computed lazily during event emission

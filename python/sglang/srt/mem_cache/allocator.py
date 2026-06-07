@@ -84,6 +84,7 @@ class BaseTokenToKVPoolAllocator(abc.ABC):
             self.free(torch.cat(self.free_group))
 
     def merge_and_sort_free(self):
+        """把 release_pages 合并到 free_pages 并排序，让后续 alloc 分配到连续的 index"""
         if len(self.release_pages) > 0:
             self.free_pages = torch.cat((self.free_pages, self.release_pages))
             self.free_pages, _ = torch.sort(self.free_pages)
@@ -134,6 +135,7 @@ class TokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
 
     def clear(self):
         # The padded slot 0 is used for writing dummy outputs from padded tokens.
+        # todo 一个 free_pages tensor 做 FIFO 分配，alloc 从头取，free 往尾加
         self.free_pages = torch.arange(
             1, self.size + 1, dtype=torch.int64, device=self.device
         )
@@ -164,6 +166,7 @@ class TokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
             if self.need_sort:
                 self.release_pages = torch.cat((self.release_pages, free_index))
             else:
+                # todo 回收了free_index！！！！！！
                 self.free_pages = torch.cat((self.free_pages, free_index))
         else:
             self.free_group.append(free_index)

@@ -87,7 +87,7 @@ def get_tensor_size_bytes(t: Union[torch.Tensor, List[torch.Tensor]]):
         return sum(get_tensor_size_bytes(x) for x in t)
     return np.prod(t.shape) * t.dtype.itemsize
 
-
+# todo 写入kvcache
 def _set_kv_buffer_impl(
     k: torch.Tensor,
     v: torch.Tensor,
@@ -121,6 +121,8 @@ def _set_kv_buffer_impl(
             v_cache[indices] = v
         current_stream.wait_stream(alt_stream)
     else:  # fallback to naive implementation
+        # todo indices 就是 out_cache_loc：每个 token 的物理位置
+        # todo 没有"查 block table → 算 offset"这一步。更直接，但 index 列表可能不连续（不如 block 对齐的 coalesced access 高效）。
         k_cache[indices] = k
         v_cache[indices] = v
 
@@ -130,7 +132,7 @@ class ReqToTokenPool:
 
     def __init__(
         self,
-        size: int,
+        size: int, # todo max_num_reqs
         max_context_len: int,
         device: str,
         enable_memory_saver: bool,
@@ -146,6 +148,7 @@ class ReqToTokenPool:
         self.max_context_len = max_context_len
         self.device = device
         with memory_saver_adapter.region(GPU_MEMORY_TYPE_KV_CACHE):
+            # todo 数据结构！！！！！！
             self.req_to_token = torch.zeros(
                 (self._alloc_size, max_context_len), dtype=torch.int32, device=device
             )
@@ -903,6 +906,7 @@ class MHATokenToKVPool(KVCache):
             ):
                 # [size, head_num, head_dim] for each layer
                 # The padded slot 0 is used for writing dummy outputs from padded tokens.
+                # todo kcache
                 self.k_buffer = [
                     torch.zeros(
                         (self.size + self.page_size, self.head_num, self.head_dim),
@@ -911,6 +915,7 @@ class MHATokenToKVPool(KVCache):
                     )
                     for _ in range(self.layer_num)
                 ]
+                # todo vcache
                 self.v_buffer = [
                     torch.zeros(
                         (self.size + self.page_size, self.head_num, self.v_head_dim),
