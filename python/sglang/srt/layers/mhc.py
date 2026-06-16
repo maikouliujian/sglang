@@ -24,6 +24,7 @@ FP32 = "float32"
 INT32 = "int32"
 
 
+
 @tilelang.jit(pass_configs=pass_configs)
 def hc_split_sinkhorn_kernel(hc: int, sinkhorn_iters: int, eps: float):
     n = T.symbolic("n")
@@ -90,7 +91,21 @@ def hc_split_sinkhorn_kernel(hc: int, sinkhorn_iters: int, eps: float):
 
     return hc_split_sinkhorn_kernel_
 
-
+# todo
+# Step 4: Sinkhorn归一化 - 将mixes分解为pre, post, comb三个部分
+#   输入:
+#     mixes:    [B*S, 24]      - 混合系数 (view为2D传入kernel)
+#     hc_scale: [3]            - 缩放因子 [pre_scale, post_scale, comb_scale]
+#     hc_base:  [24]           - 偏置项
+#   内部计算:
+#     pre[i]  = sigmoid(mixes[i,:4] * scale[0] + base[:4]) + eps    → [B*S, 4]
+#     post[i] = 2*sigmoid(mixes[i,4:8] * scale[1] + base[4:8])     → [B*S, 4]
+#     comb    = Sinkhorn(mixes[i,8:24] * scale[2] + base[8:24])     → [B*S, 4, 4]
+#     Sinkhorn: 先softmax(dim=-1)+eps, 再交替归一化行和列20次, 得到双随机矩阵
+#   输出:
+#     pre:  [B, S, 4]    - 前向权重 (每个HC副本的贡献权重, sigmoid>0)
+#     post: [B, S, 4]    - 后向权重 (hc_post中用于扩展, 2*sigmoid范围[0,2])
+#     comb: [B, S, 4, 4] - 组合矩阵 (双随机矩阵, 行和≈1, 列和≈1)
 def hc_split_sinkhorn(
     mixes: torch.Tensor,
     hc_scale: torch.Tensor,
@@ -103,6 +118,7 @@ def hc_split_sinkhorn(
     pre = mixes.new_empty(b, s, hc_mult)
     post = mixes.new_empty(b, s, hc_mult)
     comb = mixes.new_empty(b, s, hc_mult, hc_mult)
+    # todo
     kernel = hc_split_sinkhorn_kernel(hc_mult, sinkhorn_iters, eps)
     kernel(
         mixes.view(-1, (2 + hc_mult) * hc_mult),

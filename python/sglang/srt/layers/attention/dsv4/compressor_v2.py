@@ -70,6 +70,7 @@ class CompressorBackendMixin:
         if is_online:
             kv_score_buffer = kv_score_buffer.view(-1, 1, head_dim * 3)
         else:
+            # todo is_overlap_compress
             coff = 2 if is_overlap_compress(compress_ratio) else 1
             last_dim = 2 * head_dim * coff
             assert kv_score_buffer.shape[-1] == last_dim

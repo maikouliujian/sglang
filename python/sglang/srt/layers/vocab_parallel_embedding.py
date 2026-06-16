@@ -510,7 +510,7 @@ class VocabParallelEmbedding(torch.nn.Module):
             s += f", tp_size={self.tp_size}"
         return s
 
-
+# todo deepseek v4使用
 class ParallelLMHead(VocabParallelEmbedding):
     """Parallelized LM head.
 
@@ -526,6 +526,13 @@ class ParallelLMHead(VocabParallelEmbedding):
         org_num_embeddings: original vocabulary size (without LoRA).
         padding_size: padding size for the vocabulary.
     """
+    """语言模型头: 将HC空间的隐藏状态合并为单一表示, 然后计算logits。
+       与Block中的hc_pre不同:
+       - Block.hc_pre: 使用Sinkhorn归一化(产出pre+post+comb), 因为需要hc_post逆变换
+       - ParallelHead.hc_head: 仅使用sigmoid(产出pre), 因为只需要合并, 不需要逆变换
+       数据流 (输入 x: [B, S, 4, 4096]):
+       x[B,S,4,4096] ──→ hc_head ──→ [B,S,4096] ──→ norm ──→ get_logits ──→ [B, vocab_size]
+       """
 
     def __init__(
         self,

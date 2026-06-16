@@ -95,6 +95,7 @@ logger = logging.getLogger(__name__)
 _FP8_WO_A_GEMM = envs.SGLANG_OPT_FP8_WO_A_GEMM.get()
 
 
+# todo https://mp.weixin.qq.com/s/ZsDoLeSvYMK15-OtVyI66A
 
 if TYPE_CHECKING:
     from sglang.srt.layers.attention.deepseek_v4_backend import (
@@ -157,6 +158,17 @@ def rms_normalize_triton(
 
 
 class MQALayer(nn.Module):
+    """Multi-head Latent Attention (MLA) with sliding window + optional KV compression.
+     Uses low-rank Q projection (wq_a -> q_norm -> wq_b) and grouped low-rank O projection.
+     架构概述 (以输入 x: [b, s, 4096] 为例, 默认单卡 world_size=1):
+     ┌──────────────────────────────────────────────────────────────────────┐
+     │ Q路径:  x[b,s,4096] -> wq_a -> q_norm -> wq_b -> Q[b,s,64,512]   │
+     │ KV路径: x[b,s,4096] -> wkv -> kv_norm -> KV[b,s,512] (共享latent) │
+     │ O路径:  attn_out[b,s,64,512] -> wo_a(分组低秩) -> wo_b -> [b,s,4096]│
+     └──────────────────────────────────────────────────────────────────────┘
+     关键参数: dim=4096, n_heads=64, head_dim=512, rope_head_dim=64,
+               q_lora_rank=1024, o_lora_rank=1024, o_groups=8, window_size=128
+     """
     def __init__(
         self,
         config: DeepSeekV4Config,
@@ -239,6 +251,7 @@ class MQALayer(nn.Module):
 
         self.compressor = None
         self.indexer = None
+        # ====== KV压缩器与索引器 (仅在compress_ratio>0时启用) ======
         if self.compress_ratio:
             self.compressor = Compressor(
                 config,
@@ -251,6 +264,7 @@ class MQALayer(nn.Module):
                 prefix=add_prefix("compressor", prefix),
             )
             if self.compress_ratio == 4:
+                # 压缩比为4时, 使用Indexer进行稀疏注意力索引 (学习式top-k选择)
                 self.indexer = C4Indexer(
                     config,
                     freqs_cis=freqs_cis,
@@ -259,7 +273,10 @@ class MQALayer(nn.Module):
                     prefix=add_prefix("indexer", prefix),
                     alt_streams=self.alt_streams_indexer,
                 )
-
+            # 压缩比=128时, 仅使用规则式索引, 无需Indexer
+        # ====== 注意力汇聚参数 ======
+        # attn_sink: 可学习的注意力偏置, 用于吸收注意力分数中的"汇聚"效应
+        # weight shape: [64] (float32), 每个头一个标量
         self.attn_sink = nn.Parameter(torch.empty(self.n_heads, dtype=torch.float32))
         self.fuse_wqa_wkv = envs.SGLANG_OPT_FUSE_WQA_WKV.get()
         if self.fuse_wqa_wkv:
@@ -271,6 +288,10 @@ class MQALayer(nn.Module):
                 prefix=add_prefix("wqkv_a", prefix),
             )
         else:
+            # ====== Q投影: 两阶段低秩投影 (MLA核心) ======
+            # wq_a: Q的降维投影 (dim -> q_lora_rank)
+            #   weight shape: [1024, 4096] (float8_e4m3fn)
+            #   scale shape:  [8, 32]      (float8_e8m0fnu, 每128元素一组: 1024/128=8, 4096/128=32)
             self.wq_a = ReplicatedLinear(
                 self.hidden_size,
                 self.q_lora_rank,
@@ -278,6 +299,10 @@ class MQALayer(nn.Module):
                 quant_config=quant_config,
                 prefix=add_prefix("wq_a", prefix),
             )
+            # ====== KV投影: MLA共享潜在表示 (所有头共享一个latent) ======
+            # wkv: 将输入映射为单个共享KV latent (dim -> head_dim)
+            #   weight shape: [512, 4096] (float8_e4m3fn)
+            #   scale shape:  [4, 32]     (float8_e8m0fnu, 512/128=4, 4096/128=32)
             self.wkv = ReplicatedLinear(
                 self.hidden_size,
                 self.head_dim,
@@ -285,7 +310,12 @@ class MQALayer(nn.Module):
                 quant_config=quant_config,
                 prefix=add_prefix("wkv", prefix),
             )
+        # q_norm: Q降维后的RMSNorm
+        #   weight shape: [1024] (float32)
         self.q_norm = RMSNorm(self.q_lora_rank, eps=self.eps)
+        # wq_b: Q的升维投影 (q_lora_rank -> n_heads * head_dim), 按头维度切分(ColumnParallel)
+        #   weight shape: [32768, 1024] (float8_e4m3fn, 单卡: 64头×512维=32768)
+        #   scale shape:  [256, 8]      (float8_e8m0fnu, 32768/128=256, 1024/128=8)
         self.wq_b = ColumnParallelLinear(
             self.q_lora_rank,
             self.n_heads * self.head_dim,
@@ -295,7 +325,14 @@ class MQALayer(nn.Module):
             tp_rank=attn_tp_rank,
             tp_size=attn_tp_size,
         )
+        # kv_norm: KV latent的RMSNorm
+        #   weight shape: [512] (float32)
         self.kv_norm = RMSNorm(self.head_dim, eps=self.eps)
+        # ====== O投影: 分组低秩投影 ======
+        # wo_a: O的降维投影, 按分组进行 (每组: n_heads*head_dim/n_groups -> o_lora_rank)
+        #   实际为 ColumnParallelLinear(4096, 8192, dtype=bfloat16)
+        #   weight shape: [8192, 4096] (bfloat16, 8组×1024秩=8192)
+        #   无scale (bfloat16不需要量化)
         self.wo_a = ColumnParallelLinear(
             self.n_heads * self.head_dim // self.n_groups,
             self.n_groups * self.o_lora_rank,
@@ -311,6 +348,10 @@ class MQALayer(nn.Module):
                 self.wo_a, "weight_scale_inv"
             ), "FP8 quant_config must create weight_scale_inv"
             self.wo_a.weight_scale_inv.format_ue8m0 = True
+        # wo_b: O的升维投影, 将分组低秩结果合并回dim (n_groups*o_lora_rank -> dim)
+        #   实际为 RowParallelLinear(8192, 4096)
+        #   weight shape: [4096, 8192] (float8_e4m3fn)
+        #   scale shape:  [32, 64]     (float8_e8m0fnu, 4096/128=32, 8192/128=64)
         self.wo_b = RowParallelLinear(
             self.n_groups * self.o_lora_rank,
             self.hidden_size,
@@ -621,6 +662,21 @@ class MQALayer(nn.Module):
 
 
 class DeepseekV4DecoderLayer(nn.Module):
+    """Transformer block with Hyper-Connections (HC) mixing.
+    Instead of a simple residual, HC maintains `hc_mult` copies of the hidden state.
+    hc_pre: reduces hc copies -> 1 via learned weighted sum (pre-weights from Sinkhorn).
+    hc_post: expands 1 -> hc copies via learned post-weights + combination matrix.
+    Hyper-Connection (HC) 架构概述 (输入 x: [B, S, 4, 4096]):
+    ┌────────────────────────────────────────────────────────────────────────────┐
+    │ hc_pre:  [B,S,4,4096] ──→ (Sinkhorn加权求和) ──→ [B,S,4096]            │
+    │          产出 pre:[B,S,4], post:[B,S,4], comb:[B,S,4,4]                  │
+    │                                                                          │
+    │ Attn/FFN: [B,S,4096] ──→ norm ──→ attn/ffn ──→ [B,S,4096]              │
+    │                                                                          │
+    │ hc_post: [B,S,4096] + residual[B,S,4,4096] ──→ (加权扩展) ──→ [B,S,4,4096]│
+    └────────────────────────────────────────────────────────────────────────────┘
+    关键参数: hc_mult=4, dim=4096, mix_hc=(2+4)*4=24, hc_dim=4*4096=16384
+    """
     def __init__(
         self,
         config: DeepSeekV4Config,
@@ -658,17 +714,35 @@ class DeepseekV4DecoderLayer(nn.Module):
         self.post_attention_layernorm = RMSNorm(
             config.hidden_size, eps=config.rms_norm_eps
         )
-
-        self.hc_mult = hc_mult = config.hc_mult
-        self.hc_sinkhorn_iters = config.hc_sinkhorn_iters
-        self.hc_eps = config.hc_eps
+        self.hc_mult = hc_mult = config.hc_mult  # 4 - HC副本数
+        self.hc_sinkhorn_iters = config.hc_sinkhorn_iters   # 20 - Sinkhorn迭代次数
+        self.hc_eps = config.hc_eps  # 1e-6 - Sinkhorn的epsilon
+        # ====== Hyper-Connection (HC) 参数 ======
+        # mix_hc = (2 + hc_mult) * hc_mult = (2+4)*4 = 24
+        # 这个24维向量被拆分为三部分: pre(4) + post(4) + comb(4×4=16)
         mix_hc = (2 + hc_mult) * hc_mult
+        # hc_dim = hc_mult * dim = 4 * 4096 = 16384
         hc_dim = hc_mult * config.hidden_size
+        # hc_attn_fn: Attention HC的混合函数权重
+        #   todo shape: [24, 16384] (float32)
+        #   输入: [B, S, 16384] (4个HC副本flatten), 输出: [B, S, 24] (混合系数)
+        #   24 = pre(4) + post(4) + comb(4×4=16)
         self.hc_attn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim, dtype=torch.float32))
+        # 同上结构
         self.hc_ffn_fn = nn.Parameter(torch.empty(mix_hc, hc_dim, dtype=torch.float32))
+        # hc_attn_base: Attention HC的偏置项 (用于sigmoid变换)
+        #   todo shape: [24] (float32)
+        #   与hc_scale一起来计算【pre、post、comb】:
+        #   pre = sigmoid(mixes[:4] * scale[0] + base[:4])
+        #   post = 2*sigmoid(mixes[4:8] * scale[1] + base[4:8])
+        #   comb = Sinkhorn(mixes[8:24] * scale[2] + base[8:24])
         self.hc_attn_base = nn.Parameter(torch.empty(mix_hc, dtype=torch.float32))
+        # 同上结构
         self.hc_ffn_base = nn.Parameter(torch.empty(mix_hc, dtype=torch.float32))
+        # hc_attn_scale: Attention HC的缩放因子 (3个标量, 分别对应pre/post/comb)
+        #   todo shape: [3] (float32)
         self.hc_attn_scale = nn.Parameter(torch.empty(3, dtype=torch.float32))
+        # 同上结构
         self.hc_ffn_scale = nn.Parameter(torch.empty(3, dtype=torch.float32))
         self.rms_norm_eps = config.rms_norm_eps
         self.nsa_enable_prefill_cp = is_nsa_enable_prefill_cp()
@@ -747,13 +821,42 @@ class DeepseekV4DecoderLayer(nn.Module):
     ):
         """If *norm* is given and the TileLang path is active, the returned
         hidden_states are already post-norm (the norm is fused into the kernel)."""
+        """
+                Hyper-Connection 前处理: 将 hc_mult=4 个HC副本加权合并为1个隐藏状态
+                核心逻辑:
+                1. 对4个HC副本flatten后做线性投影 → 得到24维混合系数mixes
+                2. 通过Sinkhorn归一化将mixes分解为: pre权重[4], post权重[4], 组合矩阵[4,4]
+                3. 用pre权重对4个HC副本做加权求和 → 输出单一隐藏状态
+                参数 Shape:
+                  x:        [B, S, 4, 4096]  - 4个HC副本的隐藏状态
+                  hc_fn:    [24, 16384]      - 混合函数权重 (float32)
+                  hc_scale: [3]              - pre/post/comb的缩放因子 (float32)
+                  hc_base:  [24]             - pre/post/comb的偏置 (float32)
+                返回:
+                  y:    [B, S, 4096]         - 合并后的单一隐藏状态
+                  post: [B, S, 4]            - post-weights (给hc_post用)
+                  comb: [B, S, 4, 4]         - 组合矩阵 (给hc_post用)
+                """
 
         @compile_in_capture_mode
         def hc_pre_torch_impl(x, hc_fn):
+            # Step 1: Flatten HC维度 + 转float32
+            #   x: [B, S, 4, 4096] → x.flatten(2): [B, S, 16384]
+            #   .float(): 转为float32 (HC计算需要高精度)
             x_flat = x.flatten(1).float()
+            # Step 2: RMS归一化因子 (对flatten后的16384维做归一化)
+            #   x.square(): [B, S, 16384]
+            #   .mean(-1, keepdim=True): [B, S, 1] - 每个token的均方值
+            #   rsqrt: [B, S, 1] - 逆平方根归一化因子
             rsqrt = torch.rsqrt(
                 x_flat.square().mean(-1, keepdim=True) + self.rms_norm_eps
             )
+            # todo mixes
+            # rsqrt: [B, S, 1] (fp32)
+            # Step 3: 线性投影 + RMS归一化 → 得到混合系数
+            #   F.linear(x, hc_fn): [B, S, 16384] × [24, 16384]^T → [B, S, 24]
+            #   * rsqrt: [B, S, 24] × [B, S, 1] → [B, S, 24]
+            #   24维被拆分为: pre[:4] + post[4:8] + comb[8:24](即4×4矩阵)
             mixes = (F.linear(x_flat, hc_fn) * rsqrt).unsqueeze(1)
             return x_flat, mixes
 
@@ -804,10 +907,24 @@ class DeepseekV4DecoderLayer(nn.Module):
             rsqrt = torch.rsqrt(s_out / k + self.rms_norm_eps)
             mixes = (d_out * rsqrt.unsqueeze(1)).unsqueeze(1)
         else:
+            # todo
             x_flat, mixes = hc_pre_torch_impl(x, hc_fn)
 
         from sglang.srt.layers.mhc import hc_split_sinkhorn
-
+        # Step 4: Sinkhorn归一化 - 将mixes分解为pre, post, comb三个部分
+        #   输入:
+        #     mixes:    [B*S, 24]      - 混合系数 (view为2D传入kernel)
+        #     hc_scale: [3]            - 缩放因子 [pre_scale, post_scale, comb_scale]
+        #     hc_base:  [24]           - 偏置项
+        #   内部计算:
+        #     pre[i]  = sigmoid(mixes[i,:4] * scale[0] + base[:4]) + eps    → [B*S, 4]
+        #     post[i] = 2*sigmoid(mixes[i,4:8] * scale[1] + base[4:8])     → [B*S, 4]
+        #     comb    = Sinkhorn(mixes[i,8:24] * scale[2] + base[8:24])     → [B*S, 4, 4]
+        #     Sinkhorn: 先softmax(dim=-1)+eps, 再交替归一化行和列20次, 得到双随机矩阵
+        #   输出:
+        #     pre:  [B, S, 4]    - 前向权重 (每个HC副本的贡献权重, sigmoid>0)
+        #     post: [B, S, 4]    - 后向权重 (hc_post中用于扩展, 2*sigmoid范围[0,2])
+        #     comb: [B, S, 4, 4] - 组合矩阵 (双随机矩阵, 行和≈1, 列和≈1)
         pre, post, comb = hc_split_sinkhorn(
             mixes,
             hc_scale,
@@ -816,7 +933,14 @@ class DeepseekV4DecoderLayer(nn.Module):
             self.hc_sinkhorn_iters,
             self.hc_eps,
         )
+        # Step 5: 用pre权重对4个HC副本做加权求和 → 合并为单一隐藏状态
+        #   pre.unsqueeze(-1): [B, S, 4, 1]    - 权重维度
+        #   x.view(shape):     [B, S, 4, 4096] - 恢复4个HC副本的原始shape (float32)
+        #   相乘: [B, S, 4, 1] × [B, S, 4, 4096] → [B, S, 4, 4096] (广播)
+        #   torch.sum(dim=2):  [B, S, 4, 4096] → [B, S, 4096] (沿HC维度求和)
         y = (pre.squeeze(1).unsqueeze(-1) * x_flat.view(shape)).sum(dim=1)
+        # todo squeeze(1) 用于移除张量中第 1 维（即第二个维度，索引从 0 开始），但仅当该维度的大小为 1 时才会移除；
+        #  如果该维度大小不为 1，则张量保持不变。
         return y.to(dtype), post.squeeze(1), comb.squeeze(1), False
 
     def hc_post(
@@ -826,6 +950,21 @@ class DeepseekV4DecoderLayer(nn.Module):
         post: torch.Tensor,
         comb: torch.Tensor,
     ):
+        """
+             Hyper-Connection 后处理: 将Attn/FFN的单一输出扩展回 hc_mult=4 个HC副本,
+             并与残差(residual)通过组合矩阵(comb)混合
+             核心逻辑:
+             1. post权重: 将Attn/FFN输出复制4份, 各乘以不同post权重
+             2. comb矩阵: 将4个残差副本通过4×4双随机矩阵交叉混合
+             3. 两者相加 → 新的4个HC副本
+             参数 Shape:
+               x:        [B, S, 4096]    - Attn/FFN的输出 (单一隐藏状态)
+               residual: [B, S, 4, 4096] - HC残差 (hc_pre前的4个HC副本)
+               post:     [B, S, 4]       - post-weights (来自hc_pre)
+               comb:     [B, S, 4, 4]    - 组合矩阵 (来自hc_pre, 双随机矩阵)
+             返回:
+               y: [B, S, 4, 4096]       - 新的4个HC副本
+             """
 
         if x.shape[0] == 0:
             return torch.empty(
@@ -843,10 +982,22 @@ class DeepseekV4DecoderLayer(nn.Module):
 
         @compile_in_capture_mode
         def hc_post_torch_impl(x, residual, post, comb):
+            # 第一项: post权重 × Attn/FFN输出 (扩展为4个副本)
+            #   post.unsqueeze(-1):  [B, S, 4, 1]     - post权重
+            #   x.unsqueeze(-2):     [B, S, 1, 4096]   - Attn/FFN输出 (插入HC维度)
+            #   相乘: [B, S, 4, 1] × [B, S, 1, 4096] → [B, S, 4, 4096] (广播)
+            #   效果: 每个HC副本 = post[i] × x, i=0..3
+            #   post范围: [0, 2] (2*sigmoid), 不同副本获得不同缩放的Attn/FFN输出
+            # 第二项: comb矩阵 × 残差 (HC副本间的交叉混合)
+            #   comb.unsqueeze(-1):    [B, S, 4, 4, 1]    - 组合矩阵 (双随机)
+            #   residual.unsqueeze(-2): [B, S, 1, 4, 4096] - 残差 (插入comb输出维度)
+            #   相乘: [B, S, 4, 4, 1] × [B, S, 1, 4, 4096] → [B, S, 4, 4, 4096] (广播)
+            #   torch.sum(dim=2):      [B, S, 4, 4, 4096] → [B, S, 4, 4096] (沿源HC维度求和)
+            #   效果: 新HC副本[i] = Σ_j comb[i,j] * residual[j], 即4个旧副本的加权组合
             return (
                 post.unsqueeze(-1) * x.unsqueeze(1)
                 + (comb.unsqueeze(-1) * residual.unsqueeze(2)).sum(dim=1)
-            ).type_as(x)
+            ).type_as(x) # [B, S, 4, 4096] (bf16)
 
         return hc_post_torch_impl(x, residual, post, comb)
 
@@ -858,7 +1009,32 @@ class DeepseekV4DecoderLayer(nn.Module):
         forward_batch: ForwardBatch,
         input_ids_global: torch.Tensor,
     ) -> torch.Tensor:
-        residual = hidden_states
+        """
+                Block前向传播 - 输入 x: [B, S, 4, 4096], 4个HC副本
+                数据流:
+                x[B,S,4,4096] ──→ hc_pre ──→ [B,S,4096] ──→ attn_norm ──→ attn ──→ [B,S,4096]
+                  │                                                  │
+                  └──── residual[B,S,4,4096] ←──────────────────────┘
+                                    │
+                            hc_post(attn_out, residual, post, comb) ──→ [B,S,4,4096]
+                                    │
+                  ┌─────────────────┘
+                  ↓
+                [B,S,4,4096] ──→ hc_pre ──→ [B,S,4096] ──→ ffn_norm ──→ ffn ──→ [B,S,4096]
+                  │                                                  │
+                  └──── residual[B,S,4,4096] ←──────────────────────┘
+                                    │
+                            hc_post(ffn_out, residual, post, comb) ──→ [B,S,4,4096]
+                """
+        residual = hidden_states # residual: [B, S, 4, 4096]
+        # todo hc_pre 做两件事：
+        # todo 1. 用 pre 权重把 [T, 4, D] 压成 [T, D]
+        # todo 2. 同时生成 post 和 comb，留给 attention 后的 hc_post 用
+        # todo hidden_states就是pre
+        # todo 4====>1
+        # hc_pre: 4个HC副本 → 1个隐藏状态
+        #   输入: hidden_states[B,S,4,4096], hc_attn_fn[24,16384], hc_attn_scale[3], hc_attn_base[24]
+        #   输出: hidden_states:[B,S,4096], post:[B,S,4], comb:[B,S,4,4]
         hidden_states, post, comb, norm_fused = self.hc_pre(
             hidden_states,
             self.hc_attn_fn,
@@ -867,16 +1043,27 @@ class DeepseekV4DecoderLayer(nn.Module):
             norm=self.input_layernorm,
         )
         if not norm_fused:
+            # attn_norm: RMSNorm
+            #   输入: [B, S, 4096], weight: [4096]
+            #   输出: [B, S, 4096]
             hidden_states = self.input_layernorm(hidden_states)
-
+        # attn: 注意力计算
+        #   输入: [B, S, 4096], 输出: [B, S, 4096]
         hidden_states = self.self_attn(
             x=hidden_states,
             positions=positions,
             forward_batch=forward_batch,
         )
-
+        # todo [B, S, 4, 4096] (bf16)
+        # todo 1====>4
+        # hc_post: Attn输出 → 4个HC副本 (与残差混合)
+        #   输入: hidden_states[B,S,4096], residual[B,S,4,4096], post[B,S,4], comb[B,S,4,4]
+        #   输出: hidden_states[B, S, 4, 4096]
         hidden_states = self.hc_post(hidden_states, residual, post, comb)
         residual = hidden_states
+        # hc_pre: 4个HC副本 → 1个隐藏状态
+        #   输入: hidden_states[B,S,4,4096], hc_ffn_fn[24,16384], hc_ffn_scale[3], hc_ffn_base[24]
+        #   输出: hidden_states:[B,S,4096], post:[B,S,4], comb:[B,S,4,4]
         hidden_states, post, comb, norm_fused = self.hc_pre(
             hidden_states,
             self.hc_ffn_fn,
@@ -885,6 +1072,9 @@ class DeepseekV4DecoderLayer(nn.Module):
             norm=self.post_attention_layernorm,
         )
         if not norm_fused:
+            # ffn_norm: RMSNorm
+            #   输入: [B, S, 4096], weight: [4096]
+            #   输出: [B, S, 4096]
             hidden_states = self.post_attention_layernorm(hidden_states)
 
         _use_cp = self.nsa_enable_prefill_cp and nsa_use_prefill_cp(forward_batch)
@@ -921,6 +1111,8 @@ class DeepseekV4DecoderLayer(nn.Module):
             hidden_states = _a2a_scatter_chunks[r].contiguous()
             input_ids = input_ids.tensor_split(s)[r].contiguous()
             input_ids_global = input_ids_global.tensor_split(s)[r].contiguous()
+        # ffn: MoE前馈网络
+        #   输入: [B, S, 4096], 输出: [B, S, 4096]
         hidden_states = self.mlp(
             hidden_states,
             forward_batch,
@@ -938,7 +1130,9 @@ class DeepseekV4DecoderLayer(nn.Module):
             gathered = [torch.empty_like(t) for t in _a2a_scatter_chunks]
             attn_tp_all_gather(gathered, hidden_states.contiguous())
             hidden_states = torch.cat(gathered)
-
+        # hc_post: FFN输出 → 4个HC副本 (与残差混合)
+        #   输入: hidden_states[B,S,4096], residual[B,S,4,4096], post[B,S,4], comb[B,S,4,4]
+        #   输出: hidden_states[B, S, 4, 4096]
         hidden_states = self.hc_post(hidden_states, residual, post, comb)
 
         return hidden_states
@@ -1026,6 +1220,21 @@ class DeepseekV4Model(nn.Module):
         hc_scale: torch.Tensor,
         hc_base: torch.Tensor,
     ):
+        """
+             HC头: 将4个HC副本加权合并为单一隐藏状态 (简化版hc_pre, 无Sinkhorn)
+             与Block.hc_pre的区别:
+             - hc_pre使用Sinkhorn归一化, 产出pre+post+comb (需要hc_post逆变换)
+             - hc_head仅使用sigmoid, 产出pre (只需要合并, 无需逆变换)
+             - hc_fn shape: [4, 16384] (只需4维输出, 而非24维)
+             - hc_scale shape: [1] (1个标量, 而非3个)
+             参数 Shape:
+               x:        [B, S, 4, 4096]  - 4个HC副本的隐藏状态
+               hc_fn:    [4, 16384]       - 混合函数权重 (float32)
+               hc_scale: [1]              - 缩放因子 (float32)
+               hc_base:  [4]              - 偏置项 (float32)
+             返回:
+               y: [B, S, 4096] - 合并后的单一隐藏状态
+             """
         if x.numel() > 0:
             from sglang.srt.layers.mhc_head import fused_hc_head
 
@@ -1037,11 +1246,32 @@ class DeepseekV4Model(nn.Module):
                 norm_eps=self.norm_eps,
                 hc_eps=self.hc_eps,
             )
+        # shape=[B,S,4,4096], dtype=bf16
         shape, dtype = x.size(), x.dtype
+        # Step 1: Flatten HC维度 + 转float32
+        #   x: [B, S, 4, 4096] → x.flatten(2): [B, S, 16384] (fp32)
         x = x.flatten(1).float()
+        # Step 2: RMS归一化因子
+        #   x.square().mean(-1, keepdim=True): [B, S, 1] - 每个token的均方值
+        #   rsqrt: [B, S, 1] - 逆平方根
         rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
+        # rsqrt: [B, S, 1] (fp32)
+        # Step 3: 线性投影 + RMS归一化 → 得到混合系数
+        #   F.linear(x, hc_fn): [B, S, 16384] × [4, 16384]^T → [B, S, 4]
+        #   * rsqrt: [B, S, 4] × [B, S, 1] → [B, S, 4]
         mixes = F.linear(x, hc_fn) * rsqrt
+        # Step 4: sigmoid变换 → pre权重 (每个HC副本的贡献权重)
+        #   mixes * hc_scale: [B, S, 4] × [1] → [B, S, 4] (缩放)
+        #   + hc_base: [B, S, 4] + [4] → [B, S, 4] (偏置)
+        #   sigmoid: [B, S, 4] → [B, S, 4] (值域[0,1])
+        #   + hc_eps: [B, S, 4] → [B, S, 4] (加小量避免零权重, 值域[eps,1+eps])
         pre = torch.sigmoid(mixes * hc_scale + hc_base) + self.hc_eps
+        # pre: [B, S, 4] (fp32)
+        # Step 5: 用pre权重对4个HC副本做加权求和 → 合并为单一隐藏状态
+        #   pre.unsqueeze(-1): [B, S, 4, 1]    - 权重维度
+        #   x.view(shape):     [B, S, 4, 4096] - 恢复4个HC副本 (fp32)
+        #   相乘: [B, S, 4, 1] × [B, S, 4, 4096] → [B, S, 4, 4096] (广播)
+        #   torch.sum(dim=2):  [B, S, 4, 4096] → [B, S, 4096] (沿HC维度求和)
         y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=1)
         return y.to(dtype)
 
@@ -1105,7 +1335,7 @@ class DeepseekV4Model(nn.Module):
             return PPProxyTensors({"hidden_states": hidden_states.flatten(1)})
 
         pre_hc_head = hidden_states.flatten(1)
-
+        # todo
         hidden_states = self.hc_head(
             hidden_states, self.hc_head_fn, self.hc_head_scale, self.hc_head_base
         )

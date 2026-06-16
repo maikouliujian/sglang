@@ -347,7 +347,7 @@ class DeepSeekV4LayerItem(NamedTuple):
     compress_layer_id: int
     compress_kv_pool: Optional[DeepSeekV4SingleKVPool] = None
 
-
+# todo
 class DeepSeekV4TokenToKVPool(BaseSWAKVPool):
 
     def __init__(

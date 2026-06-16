@@ -470,7 +470,7 @@ class C4IndexerBackendMixin:
             indexer_capturer.capture(compress_layer_id, raw_indices)
 
 
-# todo
+# todo C4Indexer
 class C4Indexer(nn.Module):
     def __init__(
         self,

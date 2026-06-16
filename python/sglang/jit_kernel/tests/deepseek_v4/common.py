@@ -83,7 +83,8 @@ class PagedContext:
             + self.swa_page_size  # slack for the largest tail
         )
         return max_state_loc // self.compress_ratio + 1
-
+    # todo State 寻址
+    # todo State pool 的索引与 SWA KV cache 的 page 结构绑定，通过 ring_size 控制每个 page 保留多少 state slot。
     def state_loc(self, b: int, position: int) -> int:
         rid = int(self.req_pool_indices[b].item())
         loc = int(self.req_to_token[rid, position].item())
