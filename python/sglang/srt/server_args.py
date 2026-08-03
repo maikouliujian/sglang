@@ -659,6 +659,7 @@ class ServerArgs:
     linear_attn_prefill_backend: Optional[str] = None
 
     # Hierarchical cache
+    # todo
     enable_hierarchical_cache: bool = False
     hicache_ratio: float = 2.0
     hicache_size: int = 0

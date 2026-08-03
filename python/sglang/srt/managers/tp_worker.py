@@ -443,7 +443,7 @@ class TpModelWorker(BaseTpWorker):
             next_token_ids=next_token_ids,
             can_run_cuda_graph=can_run_cuda_graph,
         )
-
+    # todo 执行模型推理
     def forward_batch_generation(
         self,
         model_worker_batch: ModelWorkerBatch,
@@ -469,6 +469,7 @@ class TpModelWorker(BaseTpWorker):
             return self._forward_batch_generation_dllm(forward_batch)
 
         if self.pp_group.is_last_rank:
+            # todo ModelRunner
             out = self.model_runner.forward(
                 forward_batch,
                 pp_proxy_tensors=pp_proxy_tensors,
@@ -498,7 +499,7 @@ class TpModelWorker(BaseTpWorker):
                         logits_output, forward_batch
                     )
                     return batch_result
-
+                # todo 采样
                 batch_result.delay_sample_func = sample_batch_func
                 return batch_result
 

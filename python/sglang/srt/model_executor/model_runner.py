@@ -3296,7 +3296,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
             )
         forward_batch.split_index = next_split_index
         return ret
-
+    # todo 执行模型推理！！！！！！
     def forward(
         self,
         forward_batch: ForwardBatch,
@@ -3327,6 +3327,7 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                 forward_batch,
             ) as recorder_outputs,
         ):
+            # todo
             output = self._forward_raw(
                 forward_batch,
                 skip_attn_backend_init,

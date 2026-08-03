@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
     from sglang.srt.speculative.ngram_worker import NGRAMWorker
 
-
+# todo 投机解码算法
 class SpeculativeAlgorithm(Enum):
     """Builtin speculative decoding algorithms. Plugin-registered ones are
     ``CustomSpecAlgo`` instances; ``from_string`` returns either type, and
@@ -111,7 +111,7 @@ class SpeculativeAlgorithm(Enum):
 
     def supports_spec_v2(self) -> bool:
         return (self.is_eagle() and not self.is_frozen_kv_mtp()) or self.is_standalone()
-
+    # todo 创建投机解码worker
     def create_worker(
         self, server_args: ServerArgs
     ) -> Optional[Union[Type[BaseSpecWorker], Type[TpModelWorker], Type[NGRAMWorker]]]:

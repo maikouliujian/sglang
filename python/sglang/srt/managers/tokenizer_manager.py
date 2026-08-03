@@ -1893,6 +1893,7 @@ class TokenizerManager(TokenizerControlMixin, TokenizerManagerScoreMixin):
 
         # handle_loop awaits next recv immediately
         for s in pending_notify.values():
+            # todo 所有正在等待它的协程都会继续执行：
             s.event.set()
 
         # When skip_tokenizer_init is enabled, tokensizer_manager receives

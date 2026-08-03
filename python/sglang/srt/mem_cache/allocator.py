@@ -82,7 +82,8 @@ class BaseTokenToKVPoolAllocator(abc.ABC):
         self.is_not_in_free_group = True
         if self.free_group:
             self.free(torch.cat(self.free_group))
-
+    # todo 排序后 alloc 返回的 index 更倾向于连续——间接改善了 kernel 的内存访问局部性。
+    #  这是个"尽力而为"的优化，不如 vLLM 的 block 对齐那样有硬保证，但在实际场景下够用了。
     def merge_and_sort_free(self):
         """把 release_pages 合并到 free_pages 并排序，让后续 alloc 分配到连续的 index"""
         if len(self.release_pages) > 0:
@@ -398,7 +399,7 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
             self.merge_and_sort_free()
         if num_pages > len(self.free_pages):
             return None
-
+        # todo SGLang 的 allocator 极简：一个 free_pages tensor 做 FIFO 分配，alloc 从头取，free 往尾加。没有双向链表，没有 O(1) remove。
         out_pages = self.free_pages[:num_pages]
         self.free_pages = self.free_pages[num_pages:]
 

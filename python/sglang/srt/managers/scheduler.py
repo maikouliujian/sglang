@@ -1582,6 +1582,7 @@ class Scheduler(
                 continue
 
             # Get the next batch to run
+            # todo 获取调度batch
             batch = self.get_next_batch_to_run()
             self.cur_batch = batch
             disable_overlap_for_batch = self.is_disable_overlap_for_batch(batch)
@@ -2483,7 +2484,7 @@ class Scheduler(
         )
         # todo hisparse, maybe other info to contain for the new batch
         return batch
-
+    # todo 跑批
     def get_next_batch_to_run(self) -> Optional[ScheduleBatch]:
         if self.enable_fpm:
             self._fpm_batch_t0 = time.monotonic()
@@ -2563,6 +2564,7 @@ class Scheduler(
         if self.dllm_config is not None:
             new_batch = self.get_new_batch_dllm()
         else:
+            # todo
             new_batch = self.get_new_batch_prefill()
 
         need_mlp_sync = self.require_mlp_sync
@@ -2577,7 +2579,7 @@ class Scheduler(
             # 2. All new batches are some (prefill / idle) -> we do not need prepare mlp sync one more time.
             new_batch = self.maybe_prepare_mlp_sync_batch(new_batch)
             need_mlp_sync = new_batch is None
-
+        # todo 优先p，否则d
         if new_batch is not None:
             # Run prefill first if possible
             ret = new_batch
@@ -2587,6 +2589,7 @@ class Scheduler(
                 not self.running_batch.is_empty()
                 and not self.running_batch.is_prefill_only
             ):
+                # todo 执行d
                 self.running_batch = self.update_running_batch(self.running_batch)
                 ret = self.running_batch if not self.running_batch.is_empty() else None
             else:

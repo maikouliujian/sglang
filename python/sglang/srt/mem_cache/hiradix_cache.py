@@ -64,7 +64,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
+# todo HiRadixCache
 class HiRadixCache(RadixCache):
 
     def __init__(self, params: CacheInitParams, server_args: ServerArgs):
@@ -260,7 +260,7 @@ class HiRadixCache(RadixCache):
                     sorted(existing_collector.labels.keys()),
                     sorted(labels.keys()),
                 )
-
+    # todo 连接l3
     def attach_storage_backend(
         self,
         storage_backend: str,
@@ -378,7 +378,7 @@ class HiRadixCache(RadixCache):
             extra_metric_labels=self.extra_metric_labels,
         )
         return True, "Attached HiCache storage backend successfully."
-
+    # todo 分离l3
     def detach_storage_backend(self) -> tuple[bool, str]:
         """Detach (disable) storage backend at runtime.
 

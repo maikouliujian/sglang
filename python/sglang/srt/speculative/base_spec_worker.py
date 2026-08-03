@@ -7,6 +7,7 @@ if TYPE_CHECKING:
     from sglang.srt.managers.tp_worker import TpModelWorker
 
 
+
 class BaseDraftWorker(ABC):
     @abstractmethod
     def draft():
