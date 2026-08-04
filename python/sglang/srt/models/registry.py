@@ -51,7 +51,7 @@ class _ModelRegistry:
             f"Model architectures {architectures} are not supported for now. "
             f"Supported architectures: {all_supported_archs}"
         )
-
+    # todo 获取模型注册类！！！！！！
     def _try_load_model_cls(self, model_arch: str) -> Optional[Type[nn.Module]]:
         if model_arch not in self.models:
             return None
@@ -108,6 +108,7 @@ def import_model_classes(package_name: str, strict: bool = False):
                     raise
                 logger.warning(f"Ignore import error when loading {name}: {e}")
                 continue
+            # todo 模型注册逻辑！！！！！！
             if hasattr(module, "EntryClass"):
                 entry = module.EntryClass
                 if isinstance(
